@@ -758,15 +758,25 @@ select:disabled {
 }
 
 .duty-card {
+  position: relative;
+  z-index: 12;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 1px;
-  overflow: hidden;
+  overflow: visible;
   margin-bottom: 18px;
   border: 1px solid var(--line);
   border-radius: 13px;
   background: var(--line);
   box-shadow: 0 8px 24px rgba(35, 50, 43, 0.035);
+}
+
+.duty-card > label:first-child {
+  border-radius: 12px 0 0 12px;
+}
+
+.duty-card > label:last-child {
+  border-radius: 0 12px 12px 0;
 }
 
 .duty-card label {
@@ -834,7 +844,7 @@ select:disabled {
   position: absolute;
   top: calc(100% - 10px);
   left: 14px;
-  z-index: 30;
+  z-index: 80;
   display: grid;
   min-width: 150px;
   overflow: hidden;
