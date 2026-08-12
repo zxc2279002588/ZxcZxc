@@ -46,6 +46,126 @@ button {
   min-height: 100vh;
 }
 
+.music-player {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 45;
+  display: grid;
+  width: min(390px, calc(100vw - 28px));
+  grid-template-columns: 42px 48px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 14px 11px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  border-radius: 18px;
+  background: rgba(24, 38, 32, 0.94);
+  box-shadow: 0 18px 48px rgba(20, 35, 29, 0.24);
+  color: #fff;
+  backdrop-filter: blur(18px);
+}
+
+.music-toggle {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #f4b860;
+  color: #26342e;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 800;
+  box-shadow: 0 7px 18px rgba(244, 184, 96, 0.22);
+}
+
+.music-toggle:hover {
+  transform: translateY(-1px);
+  background: #ffc873;
+}
+
+.music-toggle.is-playing {
+  letter-spacing: -2px;
+}
+
+.music-cover {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #34765d, #163b2d);
+  color: #f8e7c8;
+  font-family: "STSong", "Songti SC", serif;
+  font-size: 23px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.music-info {
+  min-width: 0;
+}
+
+.music-info span,
+.music-info strong,
+.music-info small {
+  display: block;
+}
+
+.music-info span {
+  margin-bottom: 2px;
+  color: #a9c4b7;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+
+.music-info strong {
+  font-family: "STSong", "Songti SC", serif;
+  font-size: 16px;
+  letter-spacing: 0.08em;
+}
+
+.music-info small {
+  overflow: hidden;
+  margin-top: 3px;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-bars {
+  display: flex;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.music-bars i {
+  width: 3px;
+  height: 5px;
+  border-radius: 2px;
+  background: #f4b860;
+}
+
+.music-bars.is-playing i {
+  animation: music-pulse 0.8s ease-in-out infinite alternate;
+}
+
+.music-bars.is-playing i:nth-child(2) {
+  animation-delay: -0.35s;
+}
+
+.music-bars.is-playing i:nth-child(3) {
+  animation-delay: -0.6s;
+}
+
+@keyframes music-pulse {
+  from { height: 5px; }
+  to { height: 22px; }
+}
+
 .topbar {
   position: sticky;
   top: 0;
@@ -1772,6 +1892,10 @@ td textarea:focus {
   .delete-button,
   .points-input small,
   .points-input button {
+    display: none !important;
+  }
+
+  .music-player {
     display: none !important;
   }
 

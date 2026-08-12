@@ -345,8 +345,10 @@ export default function Home() {
   const [showRules, setShowRules] = useState(false);
   const [toast, setToast] = useState("");
   const [isImporting, setIsImporting] = useState(false);
+  const [isMusicPlaying, setIsMusicPlaying] = useState(false);
   const hydrated = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
     fetch(`${import.meta.env.BASE_URL}seed.json`)
@@ -398,6 +400,26 @@ export default function Home() {
     const timer = window.setTimeout(() => setToast(""), 2400);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.volume = 0.7;
+    void audio.play().catch(() => {
+      // Browsers may block audible autoplay until the visitor interacts with the page.
+      setIsMusicPlaying(false);
+    });
+  }, []);
+
+  function toggleMusic() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.paused) {
+      void audio.play().catch(() => setIsMusicPlaying(false));
+    } else {
+      audio.pause();
+    }
+  }
 
   const selectedDay = useMemo(
     () => data?.days.find((day) => day.date === selectedDate),
@@ -1442,6 +1464,36 @@ export default function Home() {
           </section>
         </div>
       )}
+
+      <aside className="music-player" aria-label="背景音乐播放器">
+        <audio
+          ref={audioRef}
+          src={`${import.meta.env.BASE_URL}music.mp3`}
+          autoPlay
+          loop
+          preload="auto"
+          onPlay={() => setIsMusicPlaying(true)}
+          onPause={() => setIsMusicPlaying(false)}
+        />
+        <button
+          className={`music-toggle ${isMusicPlaying ? "is-playing" : ""}`}
+          type="button"
+          onClick={toggleMusic}
+          aria-label={isMusicPlaying ? "暂停音乐" : "播放音乐"}
+          title={isMusicPlaying ? "暂停" : "播放"}
+        >
+          {isMusicPlaying ? "Ⅱ" : "▶"}
+        </button>
+        <div className="music-cover" aria-hidden="true">念</div>
+        <div className="music-info">
+          <span>{isMusicPlaying ? "正在播放" : "已暂停"}</span>
+          <strong>念张师</strong>
+          <small>尚春 · 张雪峰老师 我还记得你</small>
+        </div>
+        <div className={`music-bars ${isMusicPlaying ? "is-playing" : ""}`} aria-hidden="true">
+          <i /><i /><i />
+        </div>
+      </aside>
 
       {toast && <div className="toast">{toast}</div>}
     </main>
