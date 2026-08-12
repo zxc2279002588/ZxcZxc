@@ -1398,7 +1398,7 @@ export default function Home() {
 
               <div className="duty-card">
                 <label className="candidate-field">
-                  <span>值班责编 · 1B/天</span>
+                  <span>值班责编</span>
                   <button
                     type="button"
                     className="candidate-trigger"
@@ -1499,7 +1499,6 @@ export default function Home() {
                             placeholder="也可手动输入"
                             aria-label="微信公众号值班小编姓名，每周绩效1200元"
                           />
-                          <small>¥1,200 / 周</small>
                         </label>
                       )}
                       <div className="section-total">
