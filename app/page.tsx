@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { parseExcelFile } from "./excel-import";
 
 type Category = "wechat" | "remix" | "original";
@@ -123,6 +123,9 @@ const NEWS_CENTER_TEAM_SET = new Set<string>(NEWS_CENTER_TEAM);
 const WECHAT_WEEKLY_POINTS = 1200 / RMB_PER_POINT;
 const DEFAULT_FORWARD_COUNT = 40;
 const DEFAULT_FORWARD_POINTS = 1.6;
+const ADMIN_SESSION_KEY = "nanping-media-admin-until";
+const ADMIN_SESSION_MS = 2 * 60 * 60 * 1000;
+const ADMIN_PASSWORD_HASH = "5600715f42bf51c40dc330d750cd996f58fead4ddea56466ce7498d17801b3a5";
 
 const categoryMeta: Record<
   Category,
@@ -369,6 +372,16 @@ function csvCell(value: string | number) {
   return `"${String(value).replace(/"/g, '""')}"`;
 }
 
+async function passwordHash(value: string) {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function adminAccessActive() {
+  return typeof window !== "undefined" && Number(localStorage.getItem(ADMIN_SESSION_KEY) ?? 0) > Date.now();
+}
+
 export default function Home() {
   const today = useRef(new Date());
   const [data, setData] = useState<SheetData | null>(null);
@@ -386,9 +399,26 @@ export default function Home() {
   const [toast, setToast] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [isMusicPlaying, setIsMusicPlaying] = useState(false);
+  const [isMusicHidden, setIsMusicHidden] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [adminPassword, setAdminPassword] = useState("");
+  const [adminError, setAdminError] = useState("");
   const hydrated = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const pendingAdminAction = useRef<null | (() => void)>(null);
+
+  useEffect(() => {
+    const checkAdmin = () => {
+      const adminUntil = Number(localStorage.getItem(ADMIN_SESSION_KEY) ?? 0);
+      setIsAdmin(adminUntil > Date.now());
+      if (adminUntil && adminUntil <= Date.now()) localStorage.removeItem(ADMIN_SESSION_KEY);
+    };
+    checkAdmin();
+    const timer = window.setInterval(checkAdmin, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     fetch(`${import.meta.env.BASE_URL}seed.json`)
@@ -459,6 +489,40 @@ export default function Home() {
     } else {
       audio.pause();
     }
+  }
+
+  function requireAdmin(action?: () => void) {
+    const adminUntil = Number(localStorage.getItem(ADMIN_SESSION_KEY) ?? 0);
+    if (adminUntil > Date.now()) {
+      setIsAdmin(true);
+      action?.();
+      return true;
+    }
+    pendingAdminAction.current = action ?? null;
+    setAdminPassword("");
+    setAdminError("");
+    setShowAdminLogin(true);
+    return false;
+  }
+
+  async function submitAdminPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if ((await passwordHash(adminPassword)) !== ADMIN_PASSWORD_HASH) {
+      setAdminError("密码不正确，请重新输入");
+      return;
+    }
+    localStorage.setItem(ADMIN_SESSION_KEY, String(Date.now() + ADMIN_SESSION_MS));
+    setIsAdmin(true);
+    setShowAdminLogin(false);
+    setAdminPassword("");
+    setToast("管理员验证成功，2小时内可编辑");
+    const action = pendingAdminAction.current;
+    pendingAdminAction.current = null;
+    action?.();
+  }
+
+  function requestEditAccess() {
+    if (!isAdmin) requireAdmin();
   }
 
   const selectedDay = useMemo(
@@ -784,7 +848,7 @@ export default function Home() {
   }, [data, focusedPerson, monthlyVideoRewards, visibleDays]);
 
   function updateDay(patch: Partial<Day>) {
-    if (!data || !selectedDay) return;
+    if (!data || !selectedDay || !adminAccessActive()) return;
     setData({
       ...data,
       days: data.days.map((day) =>
@@ -794,7 +858,7 @@ export default function Home() {
   }
 
   function updateEntry(category: Category, id: string, patch: Partial<Entry>) {
-    if (!selectedDay) return;
+    if (!selectedDay || !adminAccessActive()) return;
     updateDay({
       sections: {
         ...selectedDay.sections,
@@ -806,7 +870,7 @@ export default function Home() {
   }
 
   function addEntry(category: Category, taskType = defaultTaskType(category)) {
-    if (!selectedDay) return;
+    if (!selectedDay || !adminAccessActive()) return;
     const entry: Entry = {
       id: `${selectedDay.date}-${category}-${Date.now()}`,
       title: "",
@@ -828,7 +892,7 @@ export default function Home() {
   }
 
   function removeEntry(category: Category, id: string) {
-    if (!selectedDay) return;
+    if (!selectedDay || !adminAccessActive()) return;
     updateDay({
       sections: {
         ...selectedDay.sections,
@@ -840,6 +904,10 @@ export default function Home() {
 
   function resetData() {
     if (!initialData.current) return;
+    if (!adminAccessActive()) {
+      requireAdmin(resetData);
+      return;
+    }
     if (!window.confirm("确认恢复原始数据？全年所有修改都会被清除，2026年7月将恢复为上传的 Excel 内容。")) return;
     setData(ensureMonth(structuredClone(initialData.current), selectedYear, selectedMonth));
     localStorage.removeItem(STORAGE_KEY);
@@ -943,6 +1011,11 @@ export default function Home() {
 
   async function handleExcelImport(file: File) {
     if (!data) return;
+    if (!adminAccessActive()) {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      requireAdmin(() => fileInputRef.current?.click());
+      return;
+    }
     setIsImporting(true);
     try {
       const result = await parseExcelFile(file);
@@ -1045,6 +1118,13 @@ export default function Home() {
           <span className={`save-status ${saved ? "is-saved" : ""}`}>
             <i /> {saved ? "已自动保存" : "保存中…"}
           </span>
+          <button
+            className={`access-status ${isAdmin ? "is-admin" : ""}`}
+            onClick={requestEditAccess}
+            title={isAdmin ? "管理员模式将在验证后2小时到期" : "当前为只读模式，点击验证管理员"}
+          >
+            {isAdmin ? "管理员 · 可编辑" : "访客 · 只读"}
+          </button>
           <button className="ghost-button" onClick={() => setShowRules(true)}>
             计分规则
           </button>
@@ -1060,7 +1140,7 @@ export default function Home() {
           />
           <button
             className="ghost-button import-button"
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => requireAdmin(() => fileInputRef.current?.click())}
             disabled={isImporting}
           >
             {isImporting ? "读取中…" : "导入 Excel"}
@@ -1199,6 +1279,8 @@ export default function Home() {
                 <label>
                   <span>值班责编 · 1B/天</span>
                   <input
+                    readOnly={!isAdmin}
+                    onClick={requestEditAccess}
                     value={selectedDay.dutyEditor ?? ""}
                     onChange={(event) => updateDay({ dutyEditor: event.target.value })}
                     placeholder="值班责编姓名"
@@ -1208,6 +1290,8 @@ export default function Home() {
                 <label>
                   <span>值班主任</span>
                   <input
+                    readOnly={!isAdmin}
+                    onClick={requestEditAccess}
                     value={selectedDay.dutyDirector ?? ""}
                     onChange={(event) => updateDay({ dutyDirector: event.target.value })}
                     placeholder="值班主任姓名"
@@ -1217,6 +1301,8 @@ export default function Home() {
                 <label>
                   <span>监审</span>
                   <input
+                    readOnly={!isAdmin}
+                    onClick={requestEditAccess}
                     value={selectedDay.supervisor ?? ""}
                     onChange={(event) => updateDay({ supervisor: event.target.value })}
                     placeholder="监审姓名"
@@ -1251,6 +1337,8 @@ export default function Home() {
                         <label className="wechat-editor-field">
                           <span>微信公众号值班小编</span>
                           <input
+                            readOnly={!isAdmin}
+                            onClick={requestEditAccess}
                             value={selectedDay.wechatEditor ?? ""}
                             onChange={(event) => updateDay({ wechatEditor: event.target.value })}
                             placeholder="填写小编姓名"
@@ -1291,6 +1379,8 @@ export default function Home() {
                                 <td className="row-number">{originalIndex + 1}</td>
                                 <td>
                                   <textarea
+                                    readOnly={!isAdmin}
+                                    onClick={requestEditAccess}
                                     className="title-input"
                                     rows={2}
                                     value={entry.title}
@@ -1301,6 +1391,8 @@ export default function Home() {
                                 </td>
                                 <td>
                                   <input
+                                    readOnly={!isAdmin}
+                                    onClick={requestEditAccess}
                                     value={entry.staff}
                                     onChange={(event) => updateEntry(category, entry.id, { staff: event.target.value })}
                                     placeholder="姓名"
@@ -1309,6 +1401,8 @@ export default function Home() {
                                 </td>
                                 <td>
                                   <input
+                                    readOnly={!isAdmin}
+                                    onClick={requestEditAccess}
                                     value={entry.views}
                                     onChange={(event) => updateEntry(category, entry.id, { views: event.target.value })}
                                     placeholder="0"
@@ -1317,6 +1411,8 @@ export default function Home() {
                                 </td>
                                 <td>
                                   <input
+                                    readOnly={!isAdmin}
+                                    onClick={requestEditAccess}
                                     value={entry.duration}
                                     onChange={(event) => updateEntry(category, entry.id, { duration: event.target.value })}
                                     placeholder={category === "wechat" ? "—" : "00:00"}
@@ -1324,8 +1420,10 @@ export default function Home() {
                                   />
                                 </td>
                                 <td>
-                                  <div className="points-input">
+                                  <div className="points-input" onClick={!isAdmin ? requestEditAccess : undefined}>
                                     <select
+                                      disabled={!isAdmin}
+                                      onClick={requestEditAccess}
                                       value={entry.taskType ?? defaultTaskType(category)}
                                       onChange={(event) =>
                                         updateEntry(category, entry.id, {
@@ -1342,6 +1440,8 @@ export default function Home() {
                                       ))}
                                     </select>
                                     <input
+                                      readOnly={!isAdmin}
+                                      onClick={requestEditAccess}
                                       type="number"
                                       step="0.1"
                                       value={formatPoints(points)}
@@ -1366,7 +1466,7 @@ export default function Home() {
                                     ) : (
                                       <button
                                         title="恢复自动计分"
-                                        onClick={() => updateEntry(category, entry.id, { manualPoints: null })}
+                                        onClick={() => requireAdmin(() => updateEntry(category, entry.id, { manualPoints: null }))}
                                       >
                                         手动 ↺
                                       </button>
@@ -1378,6 +1478,8 @@ export default function Home() {
                                 </td>
                                 <td>
                                   <input
+                                    readOnly={!isAdmin}
+                                    onClick={requestEditAccess}
                                     value={entry.notes}
                                     onChange={(event) => updateEntry(category, entry.id, { notes: event.target.value })}
                                     placeholder="选填"
@@ -1387,7 +1489,7 @@ export default function Home() {
                                 <td>
                                   <button
                                     className="delete-button"
-                                    onClick={() => removeEntry(category, entry.id)}
+                                    onClick={() => requireAdmin(() => removeEntry(category, entry.id))}
                                     aria-label={`删除${entry.title || "此条内容"}`}
                                     title="删除"
                                   >
@@ -1404,11 +1506,11 @@ export default function Home() {
                       <div className="empty-search">本栏没有匹配“{query}”的内容</div>
                     )}
                     <div className="add-row-actions">
-                      <button className="add-row" onClick={() => addEntry(category)}>
+                      <button className="add-row" onClick={() => requireAdmin(() => addEntry(category))}>
                         <span>＋</span> 添加一条{meta.short}内容
                       </button>
                       {category === "wechat" && (
-                        <button className="add-row quick-performance" onClick={() => addEntry("wechat", "park_hr_micro")}>
+                        <button className="add-row quick-performance" onClick={() => requireAdmin(() => addEntry("wechat", "park_hr_micro"))}>
                           <span>＋</span> 工业园区/人社局微刊 · 3D/天
                         </button>
                       )}
@@ -1704,7 +1806,46 @@ export default function Home() {
         </div>
       )}
 
-      <aside className="music-player" aria-label="背景音乐播放器">
+      {showAdminLogin && (
+        <div className="modal-backdrop admin-backdrop" role="presentation" onMouseDown={() => {
+          pendingAdminAction.current = null;
+          setShowAdminLogin(false);
+        }}>
+          <form className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-title" onSubmit={submitAdminPassword} onMouseDown={(event) => event.stopPropagation()}>
+            <button
+              className="modal-close"
+              type="button"
+              onClick={() => {
+                pendingAdminAction.current = null;
+                setShowAdminLogin(false);
+              }}
+              aria-label="关闭"
+            >×</button>
+            <span className="admin-lock" aria-hidden="true">锁</span>
+            <span className="eyebrow">ADMIN ACCESS</span>
+            <h2 id="admin-title">管理员验证</h2>
+            <p>当前为只读模式。验证后可添加、修改或删除串单内容，权限在本浏览器保留2小时。</p>
+            <label className="admin-password-field">
+              <span>管理密码</span>
+              <input
+                type="password"
+                value={adminPassword}
+                onChange={(event) => {
+                  setAdminPassword(event.target.value);
+                  setAdminError("");
+                }}
+                placeholder="请输入管理密码"
+                autoFocus
+                autoComplete="current-password"
+              />
+            </label>
+            {adminError && <div className="admin-error" role="alert">{adminError}</div>}
+            <button className="primary-button admin-submit" type="submit">验证并进入编辑模式</button>
+          </form>
+        </div>
+      )}
+
+      <aside className={`music-player ${isMusicHidden ? "is-hidden" : ""}`} aria-label="背景音乐播放器">
         <audio
           ref={audioRef}
           src={`${import.meta.env.BASE_URL}music.mp3`}
@@ -1714,6 +1855,15 @@ export default function Home() {
           onPlay={() => setIsMusicPlaying(true)}
           onPause={() => setIsMusicPlaying(false)}
         />
+        <button
+          className="music-collapse"
+          type="button"
+          onClick={() => setIsMusicHidden((hidden) => !hidden)}
+          aria-label={isMusicHidden ? "显示音乐播放器" : "隐藏音乐播放器"}
+          title={isMusicHidden ? "显示播放器" : "隐藏播放器"}
+        >
+          {isMusicHidden ? "♫" : "⌄"}
+        </button>
         <button
           className={`music-toggle ${isMusicPlaying ? "is-playing" : ""}`}
           type="button"

@@ -63,6 +63,46 @@ button {
   box-shadow: 0 18px 48px rgba(20, 35, 29, 0.24);
   color: #fff;
   backdrop-filter: blur(18px);
+  transition: width 320ms cubic-bezier(0.22, 1, 0.36, 1), padding 320ms cubic-bezier(0.22, 1, 0.36, 1), transform 220ms ease, box-shadow 220ms ease;
+}
+
+.music-collapse {
+  position: absolute;
+  top: -11px;
+  right: 12px;
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  background: #233b31;
+  color: #f8e7c8;
+  cursor: pointer;
+  font-size: 14px;
+  box-shadow: 0 5px 14px rgba(20, 35, 29, 0.25);
+}
+
+.music-player.is-hidden {
+  width: 54px;
+  grid-template-columns: 1fr;
+  padding: 0;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+}
+
+.music-player.is-hidden > :not(audio):not(.music-collapse) {
+  display: none;
+}
+
+.music-player.is-hidden .music-collapse {
+  position: static;
+  width: 54px;
+  height: 54px;
+  border-color: rgba(255, 255, 255, 0.58);
+  background: rgba(24, 38, 32, 0.95);
+  font-size: 23px;
 }
 
 .music-toggle {
@@ -78,6 +118,7 @@ button {
   font-size: 15px;
   font-weight: 800;
   box-shadow: 0 7px 18px rgba(244, 184, 96, 0.22);
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), background 180ms ease;
 }
 
 .music-toggle:hover {
@@ -256,6 +297,72 @@ button {
 
 .save-status.is-saved i {
   background: #48a77c;
+}
+
+.access-status {
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid #ead8b9;
+  border-radius: 999px;
+  background: #fff8eb;
+  color: #8b6334;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.access-status.is-admin {
+  border-color: #bcd9ca;
+  background: #edf7f1;
+  color: var(--green);
+}
+
+button,
+[role="button"],
+.person-row,
+.person-selected,
+.section-card,
+.stat-card,
+.duty-card label,
+.wechat-editor-field {
+  transition: transform 190ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 190ms ease, border-color 190ms ease, background-color 190ms ease, color 190ms ease;
+}
+
+button:not(:disabled):hover,
+[role="button"]:hover,
+.person-row:hover,
+.person-selected:hover {
+  transform: translateY(-2px) scale(1.015);
+}
+
+button:not(:disabled):active,
+[role="button"]:active {
+  transform: translateY(0) scale(0.975);
+}
+
+.section-card:hover,
+.stat-card:hover,
+.duty-card label:hover,
+.wechat-editor-field:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 15px 38px rgba(36, 53, 45, 0.1);
+}
+
+.add-row span {
+  display: inline-block;
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.add-row:hover span {
+  transform: scale(1.28) rotate(90deg);
+}
+
+input[readonly],
+textarea[readonly],
+select:disabled {
+  cursor: pointer;
+  color: inherit;
+  opacity: 1;
 }
 
 .ghost-button,
@@ -1529,6 +1636,90 @@ td textarea:focus {
   border-radius: 19px;
   background: #fcfdfb;
   box-shadow: 0 30px 90px rgba(14, 27, 20, 0.25);
+}
+
+.admin-modal {
+  position: relative;
+  width: min(420px, 100%);
+  padding: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: 21px;
+  background: #fcfdfb;
+  box-shadow: 0 30px 90px rgba(14, 27, 20, 0.28);
+  animation: admin-modal-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes admin-modal-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.admin-lock {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  margin-bottom: 16px;
+  border-radius: 14px;
+  background: var(--green-soft);
+  color: var(--green);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.admin-modal h2,
+.admin-modal p {
+  margin: 0;
+}
+
+.admin-modal h2 {
+  margin-top: 5px;
+  font-family: "STSong", "Songti SC", serif;
+  font-size: 23px;
+}
+
+.admin-modal > p {
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.admin-password-field {
+  display: grid;
+  gap: 7px;
+  margin-top: 21px;
+}
+
+.admin-password-field span {
+  color: #59675f;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.admin-password-field input {
+  height: 44px;
+  padding: 0 13px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  outline: none;
+  background: #f8faf7;
+}
+
+.admin-password-field input:focus {
+  border-color: #80ad98;
+  box-shadow: 0 0 0 3px rgba(23, 107, 77, 0.1);
+}
+
+.admin-error {
+  margin-top: 9px;
+  color: #b14c43;
+  font-size: 10px;
+}
+
+.admin-submit {
+  width: 100%;
+  margin-top: 17px;
 }
 
 .modal-conversion {
