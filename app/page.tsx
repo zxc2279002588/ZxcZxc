@@ -91,6 +91,8 @@ type NewsCenterScore = {
   total: number;
 };
 
+type ImportMode = "day" | "month";
+
 const STORAGE_KEY = "nanping-media-rundown-calendar-v2";
 const LEGACY_STORAGE_KEY = "nanping-media-rundown-2026-07-v1";
 const RMB_PER_POINT = 25;
@@ -126,6 +128,8 @@ const DEFAULT_FORWARD_POINTS = 1.6;
 const ADMIN_SESSION_KEY = "nanping-media-admin-until";
 const ADMIN_SESSION_MS = 2 * 60 * 60 * 1000;
 const ADMIN_PASSWORD_HASH = "5600715f42bf51c40dc330d750cd996f58fead4ddea56466ce7498d17801b3a5";
+const DUTY_EDITOR_CANDIDATES = ["张瑞君", "周婷", "张笑弛"] as const;
+const WECHAT_EDITOR_CANDIDATES = ["王馨", "吴轲宇", "高洁"] as const;
 
 const categoryMeta: Record<
   Category,
@@ -404,8 +408,10 @@ export default function Home() {
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
   const [adminError, setAdminError] = useState("");
+  const [openCandidatePicker, setOpenCandidatePicker] = useState<"duty" | "wechat" | null>(null);
   const hydrated = useRef(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dayFileInputRef = useRef<HTMLInputElement>(null);
+  const monthFileInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const pendingAdminAction = useRef<null | (() => void)>(null);
 
@@ -523,6 +529,19 @@ export default function Home() {
 
   function requestEditAccess() {
     if (!isAdmin) requireAdmin();
+  }
+
+  function toggleCandidatePicker(picker: "duty" | "wechat") {
+    if (!adminAccessActive()) {
+      requireAdmin(() => setOpenCandidatePicker(picker));
+      return;
+    }
+    setOpenCandidatePicker((current) => current === picker ? null : picker);
+  }
+
+  function chooseCandidate(field: "dutyEditor" | "wechatEditor", name: string) {
+    updateDay({ [field]: name });
+    setOpenCandidatePicker(null);
   }
 
   const selectedDay = useMemo(
@@ -1009,11 +1028,12 @@ export default function Home() {
     );
   }
 
-  async function handleExcelImport(file: File) {
+  async function handleExcelImport(file: File, mode: ImportMode) {
     if (!data) return;
     if (!adminAccessActive()) {
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      requireAdmin(() => fileInputRef.current?.click());
+      const inputRef = mode === "day" ? dayFileInputRef : monthFileInputRef;
+      if (inputRef.current) inputRef.current.value = "";
+      requireAdmin(() => inputRef.current?.click());
       return;
     }
     setIsImporting(true);
@@ -1022,45 +1042,50 @@ export default function Home() {
       if (!result.days.length && !result.scoreCount) {
         throw new Error("没有识别到串单日期或工分统计表");
       }
-      const detail = [
-        result.days.length ? `${result.days.length}天串单、${result.entryCount}条内容` : "未发现每日串单",
-        result.scoreCount ? `${result.scoreCount}个人员姓名` : "未发现人员统计表",
-      ].join("；");
-      if (!window.confirm(`已识别：${detail}。\n\n导入会覆盖 Excel 中对应日期的串单，其他日期不变；Excel 原表工分不会用于排名。是否继续？`)) {
+      const currentMonth = monthKey(selectedYear, selectedMonth);
+      const importedForCurrentMonth = result.days.filter((day) => day.date.startsWith(currentMonth));
+      const sourceDay = result.days.find((day) => day.date === selectedDate) ?? result.days[0];
+      if (mode === "day" && !sourceDay) throw new Error("Excel 中没有识别到可导入的日串单");
+      if (mode === "month" && !importedForCurrentMonth.length) {
+        throw new Error(`Excel 中没有识别到 ${selectedYear}年${selectedMonth}月 的串单`);
+      }
+      const detail = mode === "day"
+        ? `将 Excel 中${sourceDay.date === selectedDate ? "同日期" : "识别到的第一天"}串单导入 ${formatDate(selectedDate)}`
+        : `将用 Excel 中的 ${importedForCurrentMonth.length} 天数据覆盖 ${selectedYear}年${selectedMonth}月整月串单`;
+      if (!window.confirm(`${detail}。\n\n此操作会替换对应范围内已有串单内容，Excel 原表工分不会用于排名。是否继续？`)) {
         return;
       }
 
-      const importedDates = new Set(result.days.map((day) => day.date));
+      const replacementDays: Day[] = mode === "day"
+        ? [{ ...normalizeDay(sourceDay as LegacyDay), date: selectedDate, weekday: selectedDay.weekday }]
+        : visibleDays.map((existingDay) => {
+            const importedDay = importedForCurrentMonth.find((day) => day.date === existingDay.date);
+            return importedDay ? normalizeDay(importedDay as LegacyDay) : blankDay(selectedYear, selectedMonth, dayLabel(existingDay.date));
+          });
+      const replacementDates = new Set(replacementDays.map((day) => day.date));
       const nextData: SheetData = {
         ...data,
         members: [...new Set([...data.members, ...result.members])],
         days: [
-          ...data.days.filter((day) => !importedDates.has(day.date)),
-          ...result.days.map((day) => normalizeDay(day as LegacyDay)),
+          ...data.days.filter((day) => !replacementDates.has(day.date)),
+          ...replacementDays,
         ].sort((a, b) => a.date.localeCompare(b.date)),
         lastImport: {
           fileName: file.name,
           importedAt: new Date().toISOString(),
-          months: result.months,
+          months: [currentMonth],
         },
       };
       setData(nextData);
-
-      const firstMonth = result.months[0] ?? result.days[0]?.date.slice(0, 7);
-      if (firstMonth) {
-        const [year, month] = firstMonth.split("-").map(Number);
-        setSelectedYear(year);
-        setSelectedMonth(month);
-        setSelectedDate(result.days[0]?.date ?? dateKey(year, month, 1));
-      }
-      setView(result.days.length ? "daily" : "summary");
-      setToast(`已导入 ${file.name}：排名以串单计算为准`);
+      setView("daily");
+      setToast(mode === "day" ? `已导入当前日串单：${file.name}` : `已覆盖当前月串单：${file.name}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "文件无法读取";
       window.alert(`Excel 导入失败：${message}\n\n请确认文件包含串联单日期标题，或带有姓名的人员统计表。`);
     } finally {
       setIsImporting(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      if (dayFileInputRef.current) dayFileInputRef.current.value = "";
+      if (monthFileInputRef.current) monthFileInputRef.current.value = "";
     }
   }
 
@@ -1129,21 +1154,38 @@ export default function Home() {
             计分规则
           </button>
           <input
-            ref={fileInputRef}
+            ref={dayFileInputRef}
             className="file-input"
             type="file"
             accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
             onChange={(event) => {
               const file = event.target.files?.[0];
-              if (file) void handleExcelImport(file);
+              if (file) void handleExcelImport(file, "day");
+            }}
+          />
+          <input
+            ref={monthFileInputRef}
+            className="file-input"
+            type="file"
+            accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void handleExcelImport(file, "month");
             }}
           />
           <button
             className="ghost-button import-button"
-            onClick={() => requireAdmin(() => fileInputRef.current?.click())}
+            onClick={() => requireAdmin(() => dayFileInputRef.current?.click())}
             disabled={isImporting}
           >
-            {isImporting ? "读取中…" : "导入 Excel"}
+            {isImporting ? "读取中…" : "导入日串单"}
+          </button>
+          <button
+            className="ghost-button import-button"
+            onClick={() => requireAdmin(() => monthFileInputRef.current?.click())}
+            disabled={isImporting}
+          >
+            {isImporting ? "读取中…" : "导入月串单"}
           </button>
           <button className="primary-button" onClick={exportCsv}>
             导出 CSV
@@ -1276,14 +1318,31 @@ export default function Home() {
               </div>
 
               <div className="duty-card">
-                <label>
+                <label className="candidate-field">
                   <span>值班责编 · 1B/天</span>
+                  <button
+                    type="button"
+                    className="candidate-trigger"
+                    onClick={() => toggleCandidatePicker("duty")}
+                    aria-haspopup="listbox"
+                    aria-expanded={openCandidatePicker === "duty"}
+                  >
+                    <span>{selectedDay.dutyEditor || "点击选择值班责编"}</span><i>⌄</i>
+                  </button>
+                  {openCandidatePicker === "duty" && (
+                    <div className="candidate-menu" role="listbox" aria-label="值班责编候选人员">
+                      {DUTY_EDITOR_CANDIDATES.map((name) => (
+                        <button key={name} type="button" role="option" aria-selected={selectedDay.dutyEditor === name} onClick={() => chooseCandidate("dutyEditor", name)}>{name}</button>
+                      ))}
+                    </div>
+                  )}
                   <input
+                    className="candidate-custom-input"
                     readOnly={!isAdmin}
                     onClick={requestEditAccess}
                     value={selectedDay.dutyEditor ?? ""}
                     onChange={(event) => updateDay({ dutyEditor: event.target.value })}
-                    placeholder="值班责编姓名"
+                    placeholder="也可手动输入姓名"
                     aria-label="值班责编姓名，每天自动计1B"
                   />
                 </label>
@@ -1334,14 +1393,31 @@ export default function Home() {
                         </div>
                       </div>
                       {category === "wechat" && (
-                        <label className="wechat-editor-field">
+                        <label className="wechat-editor-field candidate-field">
                           <span>微信公众号值班小编</span>
+                          <button
+                            type="button"
+                            className="candidate-trigger"
+                            onClick={() => toggleCandidatePicker("wechat")}
+                            aria-haspopup="listbox"
+                            aria-expanded={openCandidatePicker === "wechat"}
+                          >
+                            <span>{selectedDay.wechatEditor || "点击选择小编"}</span><i>⌄</i>
+                          </button>
+                          {openCandidatePicker === "wechat" && (
+                            <div className="candidate-menu" role="listbox" aria-label="微信公众号值班小编候选人员">
+                              {WECHAT_EDITOR_CANDIDATES.map((name) => (
+                                <button key={name} type="button" role="option" aria-selected={selectedDay.wechatEditor === name} onClick={() => chooseCandidate("wechatEditor", name)}>{name}</button>
+                              ))}
+                            </div>
+                          )}
                           <input
+                            className="candidate-custom-input"
                             readOnly={!isAdmin}
                             onClick={requestEditAccess}
                             value={selectedDay.wechatEditor ?? ""}
                             onChange={(event) => updateDay({ wechatEditor: event.target.value })}
-                            placeholder="填写小编姓名"
+                            placeholder="也可手动输入"
                             aria-label="微信公众号值班小编姓名，每周绩效1200元"
                           />
                           <small>¥1,200 / 周</small>

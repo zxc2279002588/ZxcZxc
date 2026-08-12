@@ -793,6 +793,88 @@ select:disabled {
   font-size: 12px;
 }
 
+.candidate-field {
+  position: relative;
+}
+
+.candidate-trigger {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid #dce4df;
+  border-radius: 8px;
+  background: #f8faf8;
+  cursor: pointer;
+  text-align: left;
+}
+
+.candidate-trigger span {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.candidate-trigger i {
+  color: var(--green);
+  font-style: normal;
+  transition: transform 180ms ease;
+}
+
+.candidate-trigger[aria-expanded="true"] i {
+  transform: rotate(180deg);
+}
+
+.candidate-menu {
+  position: absolute;
+  top: calc(100% - 10px);
+  left: 14px;
+  z-index: 30;
+  display: grid;
+  min-width: 150px;
+  overflow: hidden;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 14px 38px rgba(26, 43, 35, 0.17);
+  animation: candidate-menu-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes candidate-menu-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.candidate-menu button {
+  min-height: 34px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  color: #405048;
+  font-size: 11px;
+  text-align: left;
+}
+
+.candidate-menu button:hover,
+.candidate-menu button[aria-selected="true"] {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.candidate-custom-input {
+  min-height: 25px;
+  padding: 0 3px;
+  font-size: 9px !important;
+}
+
 .section-card {
   overflow: hidden;
   margin-bottom: 18px;
@@ -868,6 +950,20 @@ select:disabled {
   border: 1px solid #d5e3db;
   border-radius: 9px;
   background: #f5faf7;
+}
+
+.wechat-editor-field.candidate-field {
+  grid-template-columns: auto minmax(112px, 160px) auto;
+}
+
+.wechat-editor-field .candidate-menu {
+  top: calc(100% + 4px);
+  right: 34px;
+  left: auto;
+}
+
+.wechat-editor-field .candidate-custom-input {
+  grid-column: 2;
 }
 
 .wechat-editor-field span {
