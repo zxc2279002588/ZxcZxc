@@ -1186,24 +1186,20 @@ export default function Home() {
       }
       const currentMonth = monthKey(selectedYear, selectedMonth);
       const importedForCurrentMonth = result.days.filter((day) => day.date.startsWith(currentMonth));
-      const sourceDay = result.days.find((day) => day.date === selectedDate) ?? result.days[0];
+      const sourceDay = result.days.find((day) => day.date === selectedDate) ?? importedForCurrentMonth[0] ?? result.days[0];
       if (mode === "day" && !sourceDay) throw new Error("Excel 中没有识别到可导入的日串单");
       if (mode === "month" && !importedForCurrentMonth.length) {
         throw new Error(`Excel 中没有识别到 ${selectedYear}年${selectedMonth}月 的串单`);
       }
       const detail = mode === "day"
-        ? `将 Excel 中${sourceDay.date === selectedDate ? "同日期" : "识别到的第一天"}串单导入 ${formatDate(selectedDate)}`
+        ? `将 Excel 中识别到的 ${formatDate(sourceDay.date)} 串单导入该日期`
         : `将用 Excel 中的 ${importedForCurrentMonth.length} 天数据覆盖 ${selectedYear}年${selectedMonth}月整月串单`;
       if (!window.confirm(`${detail}。\n\n此操作会替换对应范围内已有串单内容，Excel 原表工分不会用于排名。是否继续？`)) {
         return;
       }
 
       const replacementDays: Day[] = mode === "day"
-        ? [{
-            ...normalizeDay(sourceDay as LegacyDay),
-            date: selectedDate,
-            weekday: selectedDay?.weekday ?? blankDay(selectedYear, selectedMonth, dayLabel(selectedDate)).weekday,
-          }]
+        ? [normalizeDay(sourceDay as LegacyDay)]
         : visibleDays.map((existingDay) => {
             const importedDay = importedForCurrentMonth.find((day) => day.date === existingDay.date);
             return importedDay ? normalizeDay(importedDay as LegacyDay) : blankDay(selectedYear, selectedMonth, dayLabel(existingDay.date));
@@ -1223,6 +1219,12 @@ export default function Home() {
         },
       };
       setData(nextData);
+      if (mode === "day") {
+        const [importedYear, importedMonth] = sourceDay.date.split("-").map(Number);
+        setSelectedYear(importedYear);
+        setSelectedMonth(importedMonth);
+        setSelectedDate(sourceDay.date);
+      }
       setView("daily");
       setToast(mode === "day" ? `已导入当前日串单：${file.name}` : `已覆盖当前月串单：${file.name}`);
     } catch (error) {
@@ -1579,7 +1581,7 @@ export default function Home() {
                           <tr>
                             <th className="number-col">序号</th>
                             <th className="title-col">节目标题</th>
-                            <th className="staff-col">{category === "wechat" ? "记者" : category === "remix" ? "编辑" : "采编"}</th>
+                            <th className="staff-col">{category === "remix" ? "编辑" : "记者"}</th>
                             <th className="views-col">阅读量</th>
                             <th className="duration-col">{category === "wechat" ? "刚刚帖" : "时长"}</th>
                             <th className="points-col">工分</th>

@@ -56,6 +56,21 @@ function numeric(value: unknown) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function pointsValue(value: unknown) {
+  const direct = numeric(value);
+  if (direct !== null) return direct;
+  const raw = text(value).toUpperCase().replace(/\s+/g, "");
+  if (!raw) return null;
+  const units: Record<string, number> = { A: 12, B: 8, C: 5, D: 2 };
+  let total = 0;
+  let matched = false;
+  for (const match of raw.matchAll(/(\d+(?:\.\d+)?)?([ABCD])/g)) {
+    matched = true;
+    total += Number(match[1] ?? 1) * units[match[2]];
+  }
+  return matched ? total : null;
+}
+
 function dateKey(year: number, month: number, day: number) {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
@@ -65,12 +80,15 @@ function monthKey(year: number, month: number) {
 }
 
 function parseHeaderDate(value: unknown) {
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    return { year: value.getFullYear(), month: value.getMonth() + 1, day: value.getDate() };
+  }
   const raw = text(value);
   if (!raw || !/(串|片单|联单)/.test(raw)) return null;
-  const numbers = raw.match(/\d+/g)?.map(Number) ?? [];
-  const yearIndex = numbers.findIndex((part) => part >= 1900 && part <= 2199);
-  if (yearIndex < 0 || numbers.length < yearIndex + 3) return null;
-  const [year, month, day] = numbers.slice(yearIndex, yearIndex + 3);
+  const match = raw.match(/(19\d{2}|20\d{2}|21\d{2})\s*(?:年|[./-])\s*(\d{1,2})\s*(?:月|[./-])[-\s]*(\d{1,2})\s*日?/);
+  if (!match) return null;
+  const [, yearText, monthText, dayText] = match;
+  const [year, month, day] = [Number(yearText), Number(monthText), Number(dayText)];
   if (month < 1 || month > 12 || day < 1 || day > new Date(year, month, 0).getDate()) return null;
   return { year, month, day };
 }
@@ -105,63 +123,109 @@ function dutyName(value: string, label: "值班责编" | "值班主任" | "监�
 }
 
 function findEditor(label: string) {
-  return label.match(/小编[：:]\s*(.*)$/)?.[1]?.trim() ?? "";
+  return label.match(/(?:微刊|主班)?小编\s*[：:]\s*(.*)$/)?.[1]?.trim() ?? "";
+}
+
+type RundownColumns = {
+  title: number;
+  staff: number;
+  views: number;
+  duration: number;
+  points: number;
+  notes: number;
+  perPersonPoints: number;
+};
+
+const defaultColumns: RundownColumns = {
+  title: 1,
+  staff: 2,
+  views: 3,
+  duration: 4,
+  points: 5,
+  notes: 6,
+  perPersonPoints: 7,
+};
+
+function columnsFromHeader(row: Row, previous: RundownColumns) {
+  const headers = row.map(text);
+  const normalizedHeaders = headers.map((cell) => cell.replace(/\s+/g, ""));
+  const title = normalizedHeaders.findIndex((cell) => /节目标题|标题/.test(cell));
+  if (title < 0) return null;
+  const find = (pattern: RegExp, fallback: number) => {
+    const index = normalizedHeaders.findIndex((cell) => pattern.test(cell));
+    return index >= 0 ? index : fallback;
+  };
+  const points = find(/^(工分|公分)$/, previous.points);
+  return {
+    title,
+    staff: find(/^(记者|采编|编辑|小编)$/, previous.staff),
+    views: find(/阅读量/, previous.views),
+    duration: find(/^(刚刚帖|时长)$/, previous.duration),
+    points,
+    notes: find(/备注/, previous.notes),
+    perPersonPoints: normalizedHeaders.findIndex((cell, index) => index > points && /^(工分|公分|个人工分)$/.test(cell)),
+  };
 }
 
 function parseRundownRows(rows: Row[], sourceTag: string) {
   const dayMap = new Map<string, ImportedDay>();
   let current: ImportedDay | null = null;
   let category: Category = "wechat";
+  let columns = { ...defaultColumns };
 
   rows.forEach((row, rowIndex) => {
-    const first = text(row[0]);
-    const title = text(row[1]);
-    const parsedDate = parseHeaderDate(row[0]);
+    const rowText = row.map(text).filter(Boolean).join(" ");
+    const parsedDate = row.map(parseHeaderDate).find((value): value is NonNullable<ReturnType<typeof parseHeaderDate>> => Boolean(value)) ?? null;
     if (parsedDate) {
       const date = dateKey(parsedDate.year, parsedDate.month, parsedDate.day);
       current = blankImportedDay(date);
       dayMap.set(date, current);
       category = "wechat";
+      columns = { ...defaultColumns };
       return;
     }
     if (!current) return;
 
-    if (first.startsWith("微信公众号")) {
-      current.wechatEditor = findEditor(first);
+    if (rowText.includes("微信公众号")) {
+      current.wechatEditor = findEditor(rowText);
       category = "wechat";
       return;
     }
-    if (first.includes("小编二创短视频")) {
-      current.videoEditor = findEditor(first);
+    if (rowText.includes("小编二创短视频")) {
+      current.videoEditor = findEditor(rowText);
       category = "remix";
       return;
     }
-    if (first.includes("记者原创短视频")) {
+    if (rowText.includes("记者原创短视频")) {
       category = "original";
       return;
     }
-    if (first.startsWith("序号")) return;
-    if (/(值班责编|值班主任|监审)/.test(first)) {
-      const dutyLine = row.map(text).filter(Boolean).join(" ");
-      current.dutyEditor = dutyName(dutyLine, "值班责编") || current.dutyEditor;
-      current.dutyDirector = dutyName(dutyLine, "值班主任") || current.dutyDirector;
-      current.supervisor = dutyName(dutyLine, "监审") || current.supervisor;
+    const detectedColumns = columnsFromHeader(row, columns);
+    if (detectedColumns) {
+      columns = detectedColumns;
       return;
     }
+    if (/(值班责编|值班主任|监审)/.test(rowText)) {
+      current.dutyEditor = dutyName(rowText, "值班责编") || current.dutyEditor;
+      current.dutyDirector = dutyName(rowText, "值班主任") || current.dutyDirector;
+      current.supervisor = dutyName(rowText, "监审") || current.supervisor;
+      return;
+    }
+    const title = text(row[columns.title]);
     if (!title) return;
 
-    const fullPoints = numeric(row[5]);
-    const perPersonPoints = numeric(row[7]);
+    const fullPoints = pointsValue(row[columns.points]);
+    const perPersonPoints = columns.perPersonPoints >= 0 ? pointsValue(row[columns.perPersonPoints]) : null;
     const points = fullPoints ?? perPersonPoints;
     current.sections[category].push({
       id: `${sourceTag}-${current.date}-${category}-${rowIndex}`,
       title,
-      staff: text(row[2]),
-      views: text(row[3]),
-      duration: text(row[4]),
+      staff: text(row[columns.staff]),
+      views: text(row[columns.views]),
+      duration: text(row[columns.duration]),
       manualPoints: points,
       sourcePoints: points,
-      notes: text(row[6]),
+      notes: text(row[columns.notes]),
     });
   });
 
@@ -239,6 +303,17 @@ export async function parseExcelFile(file: File): Promise<ExcelImportResult> {
 
   const members = new Set<string>();
   Object.values(scoresByMonth).flat().forEach((score) => members.add(score.name));
+  days.forEach((day) => {
+    [day.wechatEditor, day.videoEditor, day.dutyEditor, day.dutyDirector, day.supervisor]
+      .flatMap((value) => text(value).split(/[、，,；;\/\s]+/))
+      .filter((name) => name.length >= 2 && name.length <= 4)
+      .forEach((name) => members.add(name));
+    Object.values(day.sections).flat().forEach((entry) => {
+      text(entry.staff).replace(/(AI|ai)制作[：:]?/g, "").split(/[、，,；;\/\s]+/)
+        .filter((name) => name.length >= 2 && name.length <= 4)
+        .forEach((name) => members.add(name));
+    });
+  });
   const months = new Set<string>();
   days.forEach((day) => months.add(day.date.slice(0, 7)));
   Object.keys(scoresByMonth).forEach((month) => months.add(month));
