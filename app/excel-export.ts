@@ -113,7 +113,15 @@ function updateNewMediaSheet(XLSX: any, sheet: any, payload: ExportPayload) {
   for (let row = 27; row <= 41; row += 1) {
     const score = payload.newMediaScores[row - 27];
     writeCell(sheet, `B${row}`, score?.name ?? "", templateName);
-    writeCell(sheet, `C${row}`, score?.total ?? "", templateTotal);
+    if (score) {
+      const totalCell = clone(templateTotal);
+      totalCell.t = "n";
+      totalCell.f = `SUM(${score.duty},${score.wechat},${score.remix},${score.original},${score.fixed})`;
+      delete totalCell.v;
+      sheet[`C${row}`] = totalCell;
+    } else {
+      writeCell(sheet, `C${row}`, "", templateTotal);
+    }
   }
   const bonusRows = [
     [18, "周婷", "【新闻回看】视频回看每日上传绩效：24分；", 24],
@@ -181,5 +189,7 @@ export async function exportMonthlyWorkbook(payload: ExportPayload) {
     }
   });
   workbook.SheetNames = renamed;
+  workbook.Workbook = workbook.Workbook ?? {};
+  workbook.Workbook.CalcPr = { calcMode: "auto", fullCalcOnLoad: true, forceFullCalc: true };
   XLSX.writeFile(workbook, `新媒体${payload.year}年${payload.month}月工分与串单总表.xlsx`, { cellStyles: true, bookType: "xlsx" });
 }
