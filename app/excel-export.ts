@@ -45,6 +45,7 @@ type ExportPayload = {
   month: number;
   days: ExportDay[];
   newMediaScores: NewMediaScore[];
+  nonMediaScores: NewMediaScore[];
   newsCenterScores: NewsCenterScore[];
   microRewards: MicroReward[];
 };
@@ -53,24 +54,6 @@ type DailyExportPayload = ExportDay;
 
 function clone<T>(value: T): T {
   return value === undefined ? value : JSON.parse(JSON.stringify(value));
-}
-
-function writeCell(sheet: any, address: string, value: unknown, templateCell?: any) {
-  const target = sheet[address] ?? {};
-  if (templateCell?.s !== undefined) target.s = clone(templateCell.s);
-  if (templateCell?.z !== undefined) target.z = templateCell.z;
-  delete target.f;
-  target.v = value ?? "";
-  target.t = typeof value === "number" ? "n" : "s";
-  sheet[address] = target;
-}
-
-function copyStyledRow(XLSX: any, sheet: any, templates: Record<number, any[]>, sourceRow: number, targetRow: number, values: unknown[]) {
-  const styleCells = templates[sourceRow];
-  for (let column = 0; column < 8; column += 1) {
-    const address = XLSX.utils.encode_cell({ r: targetRow - 1, c: column });
-    writeCell(sheet, address, values[column] ?? "", styleCells[column]);
-  }
 }
 
 function dailyBodySourceRow(category: "wechat" | "remix" | "original", index: number) {
@@ -200,58 +183,100 @@ export async function exportDailyWorkbook(day: DailyExportPayload) {
   URL.revokeObjectURL(url);
 }
 
-function buildRundownSheet(XLSX: any, sheet: any, payload: ExportPayload) {
-  const templateRows: Record<number, any[]> = {};
-  [1, 2, 3, 4, 9, 10, 11, 13, 14, 15, 17, 18, 19].forEach((row) => {
-    templateRows[row] = Array.from({ length: 8 }, (_, column) => clone(sheet[XLSX.utils.encode_cell({ r: row - 1, c: column })] ?? {}));
+function buildRundownSheet(sheet: any, payload: ExportPayload) {
+  const sourceRows = [1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+  const templateCells: Record<number, any[]> = {};
+  const templateHeights: Record<number, number | undefined> = {};
+  sourceRows.forEach((row) => {
+    templateCells[row] = Array.from({ length: 7 }, (_, column) => clone(sheet.getCell(row, column + 1).style));
+    templateHeights[row] = sheet.getRow(row).height;
   });
-  Object.keys(sheet).filter((key) => /^[A-H]\d+$/.test(key)).forEach((key) => delete sheet[key]);
-  sheet["!merges"] = [];
-  sheet["!rows"] = [];
+  const columnWidths = Array.from({ length: 7 }, (_, column) => sheet.getColumn(column + 1).width);
+  Object.values(sheet._merges ?? {}).forEach((merge: any) => {
+    if (merge?.range) sheet.unMergeCells(merge.range);
+  });
+  sheet.spliceRows(1, sheet.rowCount);
+  const writeRow = (sourceRow: number, targetRow: number, values: unknown[]) => {
+    const target = sheet.getRow(targetRow);
+    for (let column = 1; column <= 7; column += 1) {
+      target.getCell(column).style = clone(templateCells[sourceRow][column - 1]);
+      target.getCell(column).value = values[column - 1] ?? "";
+    }
+    if (templateHeights[sourceRow] !== undefined) target.height = templateHeights[sourceRow];
+  };
+  const merge = (row: number) => sheet.mergeCells(row, 1, row, 7);
   let row = 1;
-  const merge = (at: number) => sheet["!merges"].push({ s: { r: at - 1, c: 0 }, e: { r: at - 1, c: 6 } });
   payload.days.forEach((day) => {
     const [year, month, date] = day.date.split("-").map(Number);
-    copyStyledRow(XLSX, sheet, templateRows, 1, row, [`新媒体串片单  ${year}-${month}-${date} ${day.weekday}`]); merge(row); row += 1;
-    copyStyledRow(XLSX, sheet, templateRows, 2, row, [`微信公众号  本周微刊小编：${day.wechatEditor || ""}`]); merge(row); row += 1;
-    copyStyledRow(XLSX, sheet, templateRows, 3, row, ["序号", " 节 目 标 题", "记者", "阅读量", "刚刚帖", "工分", "备注"]); row += 1;
+    writeRow(1, row, [`新媒体串片单  ${year}-${month}-${date}${day.weekday}`]); merge(row); row += 1;
+    writeRow(2, row, [`微信公众号  本周微刊小编：${day.wechatEditor || ""}`]); merge(row); row += 1;
+    writeRow(3, row, ["序号", " 节 目 标 题", "记者", "阅读量", "刚刚帖", "工分", "备注"]); row += 1;
     day.sections.wechat.forEach((entry, index) => {
-      copyStyledRow(XLSX, sheet, templateRows, 4, row, [index + 1, entry.title, entry.staff, entry.views, entry.duration, entry.exportPoints || "", entry.notes, entry.exportPoints || ""]); row += 1;
+      writeRow(dailyBodySourceRow("wechat", index), row, [index + 1, entry.title, entry.staff, entry.views, entry.duration, entry.exportPoints || "", entry.notes]);
+      row += 1;
     });
-    copyStyledRow(XLSX, sheet, templateRows, 9, row, ["小编二创短视频（含制作封面、包框）"]); merge(row); row += 1;
-    copyStyledRow(XLSX, sheet, templateRows, 10, row, ["序号", " 节 目 标 题", "编辑", "阅读量", "时长", "工分", "备注"]); row += 1;
+    writeRow(9, row, [`小编二创短视频（含制作封面、包框） 本周短视频主班小编：${day.videoEditor || ""}`]); merge(row); row += 1;
+    writeRow(10, row, ["序号", " 节 目 标 题", "编辑", "阅读量", "时长", "工分", "备注"]); row += 1;
     day.sections.remix.forEach((entry, index) => {
-      copyStyledRow(XLSX, sheet, templateRows, 11, row, [index + 1, entry.title, entry.staff, entry.views, entry.duration, entry.exportPoints || "", entry.notes, entry.exportPoints || ""]); row += 1;
+      writeRow(dailyBodySourceRow("remix", index), row, [index + 1, entry.title, entry.staff, entry.views, entry.duration, entry.exportPoints || "", entry.notes]);
+      row += 1;
     });
-    copyStyledRow(XLSX, sheet, templateRows, 13, row, ["记者原创短视频（新媒体首发）"]); merge(row); row += 1;
-    copyStyledRow(XLSX, sheet, templateRows, 14, row, ["序号", " 节 目 标 题", "采编", "阅读量", "时长", "工分", "备注"]); row += 1;
+    writeRow(13, row, ["记者原创短视频（新媒体首发）"]); merge(row); row += 1;
+    writeRow(14, row, ["序号", " 节 目 标 题", "采编", "阅读量", "时长", "工分", "备注"]); row += 1;
     day.sections.original.forEach((entry, index) => {
-      copyStyledRow(XLSX, sheet, templateRows, 15, row, [index + 1, entry.title, entry.staff, entry.views, entry.duration, entry.exportPoints || "", entry.notes, entry.exportPoints || ""]); row += 1;
+      writeRow(dailyBodySourceRow("original", index), row, [index + 1, entry.title, entry.staff, entry.views, entry.duration, entry.exportPoints || "", entry.notes]);
+      row += 1;
     });
-    copyStyledRow(XLSX, sheet, templateRows, 17, row, [`值班责编：${day.dutyEditor || ""}    值班主任：${day.dutyDirector || ""}    监审：${day.supervisor || ""}`]); merge(row); row += 1;
-    copyStyledRow(XLSX, sheet, templateRows, 18, row, []); row += 1;
-    copyStyledRow(XLSX, sheet, templateRows, 19, row, []); row += 1;
+    writeRow(17, row, [`   值班责编:${day.dutyEditor || ""}     值班主任： ${day.dutyDirector || ""}        监审：${day.supervisor || ""}`]); merge(row); row += 1;
+    writeRow(18, row, []); row += 1;
+    writeRow(19, row, []); row += 1;
   });
-  sheet["!ref"] = `A1:H${Math.max(1, row - 1)}`;
+  columnWidths.forEach((width, column) => {
+    if (width !== undefined) sheet.getColumn(column + 1).width = width;
+  });
 }
 
-function updateNewMediaSheet(XLSX: any, sheet: any, payload: ExportPayload) {
-  writeCell(sheet, "A1", `${payload.month}月新媒体人员绩效`, sheet.A1);
-  writeCell(sheet, "B26", "新媒体人员合计分", sheet.B26);
-  const templateName = clone(sheet.B34 ?? sheet.B27 ?? {});
-  const templateTotal = clone(sheet.C34 ?? sheet.C27 ?? {});
+function updateNewMediaSheet(sheet: any, payload: ExportPayload) {
+  sheet.getCell("B26").value = "新媒体人员合计分";
+  const newMediaNameStyle = clone(sheet.getCell("B27").style);
+  const newMediaTotalStyle = clone(sheet.getCell("C27").style);
+  const newMediaHeight = sheet.getRow(27).height;
+  const nonMediaHeaderStyle = Array.from({ length: 6 }, (_, column) => clone(sheet.getCell(37, column + 1).style));
+  const nonMediaHeaderHeight = sheet.getRow(37).height;
+  const nonMediaNameStyle = clone(sheet.getCell("B38").style);
+  const nonMediaTotalStyle = clone(sheet.getCell("C38").style);
+  const nonMediaHeight = sheet.getRow(38).height;
+  if (sheet.getCell("B37").isMerged) sheet.unMergeCells("B37:C37");
   for (let row = 27; row <= 41; row += 1) {
     const score = payload.newMediaScores[row - 27];
-    writeCell(sheet, `B${row}`, score?.name ?? "", templateName);
-    if (score) {
-      const totalCell = clone(templateTotal);
-      totalCell.t = "n";
-      totalCell.f = `SUM(${score.duty},${score.wechat},${score.remix},${score.original},${score.fixed})`;
-      delete totalCell.v;
-      sheet[`C${row}`] = totalCell;
-    } else {
-      writeCell(sheet, `C${row}`, "", templateTotal);
-    }
+    const targetRow = sheet.getRow(row);
+    targetRow.getCell(2).style = clone(newMediaNameStyle);
+    targetRow.getCell(3).style = clone(newMediaTotalStyle);
+    targetRow.getCell(2).value = score?.name ?? "";
+    targetRow.getCell(3).value = score
+      ? { formula: `SUM(${score.duty},${score.wechat},${score.remix},${score.original},${score.fixed})` }
+      : "";
+    if (newMediaHeight !== undefined) targetRow.height = newMediaHeight;
+  }
+  const nonMediaHeaderRow = 43;
+  for (let column = 1; column <= 6; column += 1) {
+    const cell = sheet.getCell(nonMediaHeaderRow, column);
+    cell.style = clone(nonMediaHeaderStyle[column - 1]);
+    cell.value = "";
+  }
+  if (nonMediaHeaderHeight !== undefined) sheet.getRow(nonMediaHeaderRow).height = nonMediaHeaderHeight;
+  sheet.mergeCells(`B${nonMediaHeaderRow}:C${nonMediaHeaderRow}`);
+  sheet.getCell(`B${nonMediaHeaderRow}`).value = "非新媒体人员合计分";
+  const firstNonMediaRow = nonMediaHeaderRow + 1;
+  const neededLastRow = firstNonMediaRow + Math.max(15, payload.nonMediaScores.length) - 1;
+  for (let row = firstNonMediaRow; row <= neededLastRow; row += 1) {
+    const score = payload.nonMediaScores[row - firstNonMediaRow];
+    const targetRow = sheet.getRow(row);
+    targetRow.getCell(2).style = clone(nonMediaNameStyle);
+    targetRow.getCell(3).style = clone(nonMediaTotalStyle);
+    targetRow.getCell(2).value = score?.name ?? "";
+    targetRow.getCell(3).value = score?.total ?? "";
+    if (nonMediaHeight !== undefined) targetRow.height = nonMediaHeight;
   }
   const bonusRows = [
     [18, "周婷", "【新闻回看】视频回看每日上传绩效：24分；", 24],
@@ -259,67 +284,75 @@ function updateNewMediaSheet(XLSX: any, sheet: any, payload: ExportPayload) {
     [22, "吴轲宇", "接听指令电话", 20],
   ] as const;
   bonusRows.forEach(([row, name, label, points]) => {
-    writeCell(sheet, `A${row}`, name, sheet[`A${row}`]);
-    writeCell(sheet, `B${row}`, label, sheet[`B${row}`]);
-    writeCell(sheet, `F${row}`, points, sheet[`F${row}`]);
+    sheet.getCell(`A${row}`).value = name;
+    sheet.getCell(`B${row}`).value = label;
+    sheet.getCell(`F${row}`).value = points;
   });
-  sheet["!ref"] = `A1:F52`;
 }
 
-function updateMicroSheet(XLSX: any, sheet: any, payload: ExportPayload) {
-  writeCell(sheet, "A1", `${payload.month}月份刚刚帖及微刊阅读量奖励明细`, sheet.A1);
-  const template = Array.from({ length: 6 }, (_, column) => clone(sheet[XLSX.utils.encode_cell({ r: 2, c: column })] ?? {}));
-  Object.keys(sheet).filter((key) => /^[A-F]\d+$/.test(key) && Number(key.match(/\d+/)?.[0]) >= 3).forEach((key) => delete sheet[key]);
+function updateMicroSheet(sheet: any, payload: ExportPayload) {
+  sheet.getCell("A1").value = `${payload.month}月份刚刚帖及微刊阅读量超5000部分`;
+  const template = Array.from({ length: 6 }, (_, column) => clone(sheet.getCell(3, column + 1).style));
+  const templateHeight = sheet.getRow(3).height;
+  const rowsToClear = Math.max(sheet.rowCount, payload.microRewards.length + 2);
+  for (let row = 3; row <= rowsToClear; row += 1) {
+    for (let column = 1; column <= 6; column += 1) {
+      const cell = sheet.getCell(row, column);
+      cell.style = clone(template[column - 1]);
+      cell.value = "";
+    }
+    if (templateHeight !== undefined) sheet.getRow(row).height = templateHeight;
+  }
   payload.microRewards.forEach((item, index) => {
     const row = index + 3;
     const values = [index + 1, item.title, item.views, item.staff, item.reward, item.notes];
-    values.forEach((value, column) => writeCell(sheet, XLSX.utils.encode_cell({ r: row - 1, c: column }), value, template[column]));
+    values.forEach((value, column) => {
+      sheet.getCell(row, column + 1).value = value;
+    });
   });
-  sheet["!ref"] = `A1:F${Math.max(3, payload.microRewards.length + 2)}`;
 }
 
-function updateNewsCenterSheet(XLSX: any, sheet: any, payload: ExportPayload) {
-  writeCell(sheet, "A1", `${payload.month}月新媒体工分`, sheet.A1);
-  const styleRows = Array.from({ length: 7 }, (_, column) => clone(sheet[XLSX.utils.encode_cell({ r: 2, c: column })] ?? {}));
+function updateNewsCenterSheet(sheet: any, payload: ExportPayload) {
+  sheet.getCell("A1").value = `${payload.month}月新媒体工分`;
   payload.newsCenterScores.forEach((person, index) => {
     const row = index + 3;
     const values = [person.order, person.name, person.forwardCount, person.micro || "", person.video || "", person.justNow || ""];
-    values.forEach((value, column) => writeCell(sheet, XLSX.utils.encode_cell({ r: row - 1, c: column }), value, styleRows[column]));
-    const totalCell = sheet[`G${row}`] ?? clone(styleRows[6]);
-    totalCell.t = "n";
-    totalCell.f = `C${row}/25+F${row}+E${row}+D${row}`;
-    delete totalCell.v;
-    sheet[`G${row}`] = totalCell;
+    values.forEach((value, column) => {
+      sheet.getCell(row, column + 1).value = value;
+    });
+    sheet.getCell(`G${row}`).value = { formula: `C${row}/25+F${row}+E${row}+D${row}` };
   });
   const totalRow = payload.newsCenterScores.length + 3;
-  writeCell(sheet, `F${totalRow}`, "合计", sheet.F47 ?? styleRows[5]);
-  const totalCell = clone(sheet.G47 ?? styleRows[6]);
-  totalCell.t = "n";
-  totalCell.f = `SUM(G3:G${totalRow - 1})`;
-  delete totalCell.v;
-  sheet[`G${totalRow}`] = totalCell;
-  sheet["!ref"] = `A1:G${totalRow}`;
+  sheet.getCell(`G${totalRow}`).value = { formula: `SUM(G3:G${totalRow - 1})` };
 }
 
 export async function exportMonthlyWorkbook(payload: ExportPayload) {
-  const XLSX = await import("xlsx");
-  const response = await fetch(`${import.meta.env.BASE_URL}monthly-export-template.xlsx`);
+  const ExcelJS = (await import("exceljs")).default;
+  const response = await fetch(`${import.meta.env.BASE_URL}monthly-performance-template.xlsx`);
   if (!response.ok) throw new Error("无法读取月度导出模板");
-  const workbook = XLSX.read(await response.arrayBuffer(), { type: "array", cellStyles: true, cellFormula: true, bookVBA: true });
-  const [rundownName, performanceName, microName, newsName] = workbook.SheetNames;
-  buildRundownSheet(XLSX, workbook.Sheets[rundownName], payload);
-  updateNewMediaSheet(XLSX, workbook.Sheets[performanceName], payload);
-  updateMicroSheet(XLSX, workbook.Sheets[microName], payload);
-  updateNewsCenterSheet(XLSX, workbook.Sheets[newsName], payload);
-  const renamed = workbook.SheetNames.map((name) => name.replace(/^7月/, `${payload.month}月`));
-  workbook.SheetNames.forEach((oldName, index) => {
-    if (renamed[index] !== oldName) {
-      workbook.Sheets[renamed[index]] = workbook.Sheets[oldName];
-      delete workbook.Sheets[oldName];
-    }
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await response.arrayBuffer());
+  const [rundownSheet, performanceSheet, microSheet, newsSheet] = workbook.worksheets;
+  if (!rundownSheet || !performanceSheet || !microSheet || !newsSheet) throw new Error("月度模板必须包含四个工作表");
+  const originalSheetNames = workbook.worksheets.map((sheet: any) => sheet.name);
+  const temporaryNames = workbook.worksheets.map((sheet: any, index: number) => `__monthly_export_${index + 1}__`);
+  workbook.worksheets.forEach((sheet: any, index: number) => {
+    sheet.name = temporaryNames[index];
   });
-  workbook.SheetNames = renamed;
-  workbook.Workbook = workbook.Workbook ?? {};
-  workbook.Workbook.CalcPr = { calcMode: "auto", fullCalcOnLoad: true, forceFullCalc: true };
-  XLSX.writeFile(workbook, `新媒体${payload.year}年${payload.month}月工分与串单总表.xlsx`, { cellStyles: true, bookType: "xlsx" });
+  buildRundownSheet(rundownSheet, payload);
+  updateNewMediaSheet(performanceSheet, payload);
+  updateMicroSheet(microSheet, payload);
+  updateNewsCenterSheet(newsSheet, payload);
+  workbook.worksheets.forEach((sheet: any, index: number) => {
+    sheet.name = originalSheetNames[index].replace(/^7月/, `${payload.month}月`);
+  });
+  workbook.calcProperties.fullCalcOnLoad = true;
+  const content = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([content as BlobPart], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `新媒体${payload.year}年${payload.month}月绩效.xlsx`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }

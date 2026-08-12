@@ -212,6 +212,7 @@ function microReadingReward(viewsValue: string) {
   if (views >= 1000000) return 24;
   if (views >= 100000) return 12;
   if (views >= 10000) return 5;
+  if (views > 5000) return 2;
   return 0;
 }
 
@@ -1062,17 +1063,39 @@ export default function Home() {
             original: day.sections.original.map((entry) => ({ ...entry, exportPoints: exportEntryPoints("original", entry, monthlyVideoRewards.get(entry.id) ?? 0) })),
           },
         })),
-        newMediaScores: scoreGroups[0].people.map(({ person, rank }) => ({ ...person, rank })),
+        newMediaScores: NEW_MEDIA_TEAM.map((name, index) => ({
+          ...(scores.find((person) => person.name === name) ?? {
+            name,
+            duty: 0,
+            wechat: 0,
+            remix: 0,
+            original: 0,
+            fixed: 0,
+            total: 0,
+            pieces: 0,
+          }),
+          rank: index + 1,
+        })),
+        nonMediaScores: scores
+          .filter((person) => !NEW_MEDIA_TEAM_SET.has(person.name) && person.total > 0)
+          .map((person, index) => ({ ...person, rank: index + 1 })),
         newsCenterScores,
         microRewards: visibleDays.flatMap((day) => day.sections.wechat.flatMap((entry) => {
+          const views = parseViews(entry.views);
+          if (views <= 5000) return [];
           const reward = microReadingReward(entry.views);
-          if (!reward) return [];
-          return [{ title: entry.title, views: entry.views, staff: entry.staff, reward, notes: entry.notes }];
+          return [{
+            title: entry.title,
+            views,
+            staff: entry.taskType === "park_hr_micro" ? day.wechatEditor : entry.staff,
+            reward,
+            notes: entry.notes,
+          }];
         })),
       });
-      setToast(`已导出 ${selectedYear}年${selectedMonth}月 工分与串单总表`);
+      setToast(`已导出 ${selectedYear}年${selectedMonth}月绩效`);
     } catch (error) {
-      window.alert(`总导出失败：${error instanceof Error ? error.message : "模板无法读取"}`);
+      window.alert(`导出当月绩效失败：${error instanceof Error ? error.message : "模板无法读取"}`);
     }
   }
 
@@ -1711,7 +1734,7 @@ export default function Home() {
                     {personQuery && <button onClick={() => setPersonQuery("")} aria-label="清除检索">×</button>}
                   </label>
                   <button className="ghost-button" onClick={exportSummaryCsv}>导出汇总</button>
-                  <button className="primary-button total-export-button" onClick={() => void exportTotalWorkbook()}>总导出 Excel</button>
+                  <button className="primary-button total-export-button" onClick={() => void exportTotalWorkbook()}>导出当月绩效</button>
                 </div>
               </div>
               <div className="performance-groups">
