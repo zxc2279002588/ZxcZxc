@@ -17,7 +17,9 @@ type TaskType =
   | "co_micro"
   | "ai_video"
   | "park_hr_micro"
-  | "duty_editor";
+  | "duty_editor"
+  | "wechat_weekly"
+  | "wechat_forward";
 
 type Entry = {
   id: string;
@@ -78,6 +80,17 @@ type PersonTask = {
   rewardPoints: number;
 };
 
+type NewsCenterScore = {
+  name: string;
+  order: number;
+  forwardCount: number;
+  forward: number;
+  micro: number;
+  video: number;
+  justNow: number;
+  total: number;
+};
+
 const STORAGE_KEY = "nanping-media-rundown-calendar-v2";
 const LEGACY_STORAGE_KEY = "nanping-media-rundown-2026-07-v1";
 const RMB_PER_POINT = 25;
@@ -99,6 +112,17 @@ const NEW_MEDIA_TEAM = [
   "刘乐",
 ] as const;
 const NEW_MEDIA_TEAM_SET = new Set<string>(NEW_MEDIA_TEAM);
+const NEWS_CENTER_TEAM = [
+  "蒋超", "徐卓凡", "余华尊", "倪婷婷", "黄琦", "寿洪清", "郑晖", "郑晟", "陈晓强", "危义铭",
+  "黄益平", "周俊", "吴丹", "黎志刚", "包剑武", "张瑞君", "许文婷", "胡志雄", "吴骁", "伍道微",
+  "杨志林", "胡宗榕", "陈慧强", "张笑弛", "翁崇毅", "邱太文", "林俊涛", "周婷", "周颖", "王馨",
+  "王小川", "林世利", "黄慧娟", "吴轲宇", "陈玲珑", "周琪圆", "刘乐", "龚启涛", "梁斌", "张云婷",
+  "陈仁", "王晓飞", "潘东浩", "牛文静", "李晨雨",
+] as const;
+const NEWS_CENTER_TEAM_SET = new Set<string>(NEWS_CENTER_TEAM);
+const WECHAT_WEEKLY_POINTS = 1200 / RMB_PER_POINT;
+const DEFAULT_FORWARD_COUNT = 40;
+const DEFAULT_FORWARD_POINTS = 1.6;
 
 const categoryMeta: Record<
   Category,
@@ -137,10 +161,12 @@ const taskMeta: Record<TaskType, { label: string; unit: string; points: number }
   ai_video: { label: "策划纯AI视频", unit: "1B/条", points: 8 },
   park_hr_micro: { label: "工业园区/人社局微刊", unit: "3D/天", points: 6 },
   duty_editor: { label: "值班责编", unit: "1B/天", points: 8 },
+  wechat_weekly: { label: "微信公众号值班小编", unit: "¥1,200/周", points: WECHAT_WEEKLY_POINTS },
+  wechat_forward: { label: "微信转发", unit: "默认40条/1.6分", points: DEFAULT_FORWARD_POINTS },
 };
 
 const entryTaskTypes = (Object.keys(taskMeta) as TaskType[]).filter(
-  (taskType) => taskType !== "duty_editor",
+  (taskType) => !["duty_editor", "wechat_weekly", "wechat_forward"].includes(taskType),
 );
 
 function defaultTaskType(category: Category): TaskType {
@@ -163,6 +189,20 @@ function microReadingReward(viewsValue: string) {
   if (views >= 100000) return 12;
   if (views >= 10000) return 5;
   return 0;
+}
+
+function justNowPoints(value: string) {
+  const normalized = String(value ?? "").replace(/,/g, "").trim();
+  const matched = normalized.match(/\d+(?:\.\d+)?/);
+  return matched ? Number(matched[0]) : 0;
+}
+
+function weekStart(dateString: string) {
+  const [year, month, day] = dateString.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  const offset = (date.getUTCDay() + 6) % 7;
+  date.setUTCDate(date.getUTCDate() - offset);
+  return dateKey(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
 }
 
 function entryPoints(category: Category, entry: Entry, monthlyVideoReward = 0) {
@@ -492,6 +532,35 @@ export default function Home() {
         });
       });
     });
+    const weeklyEditors = new Map<string, Map<string, number>>();
+    visibleDays.forEach((day) => {
+      const editors = peopleFor(day.wechatEditor, data.members);
+      if (!editors.length) return;
+      const start = weekStart(day.date);
+      editors.forEach((name) => {
+        const weeks = weeklyEditors.get(name) ?? new Map<string, number>();
+        weeks.set(start, (weeks.get(start) ?? 0) + 1 / editors.length);
+        weeklyEditors.set(name, weeks);
+      });
+    });
+    weeklyEditors.forEach((weeks, name) => {
+      const weeklyPoints = round(
+        [...weeks.values()].reduce((sum, assignedDays) => sum + (assignedDays / 7) * WECHAT_WEEKLY_POINTS, 0),
+      );
+      const current = totals.get(name) ?? {
+        name,
+        duty: 0,
+        wechat: 0,
+        remix: 0,
+        original: 0,
+        total: 0,
+        pieces: 0,
+      };
+      current.wechat += weeklyPoints;
+      current.total += weeklyPoints;
+      current.pieces += weeks.size;
+      totals.set(name, current);
+    });
     NEW_MEDIA_TEAM.forEach((name) => {
       if (!totals.has(name)) {
         totals.set(name, {
@@ -508,6 +577,55 @@ export default function Home() {
     return [...totals.values()].sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, "zh-CN"));
   }, [data, monthlyVideoRewards, visibleDays]);
 
+  const newsCenterScores = useMemo<NewsCenterScore[]>(() => {
+    if (!data) return [];
+    const totals = new Map<string, Omit<NewsCenterScore, "name" | "order" | "forwardCount" | "forward" | "total">>();
+    NEWS_CENTER_TEAM.forEach((name) => totals.set(name, { micro: 0, video: 0, justNow: 0 }));
+    visibleDays.forEach((day) => {
+      day.sections.wechat.forEach((entry) => {
+        const people = entryPeople(entry, day, data.members).filter((name) => NEWS_CENTER_TEAM_SET.has(name));
+        if (!people.length) return;
+        const rewardShare = microReadingReward(entry.views) / people.length;
+        const justNowShare = justNowPoints(entry.duration) / people.length;
+        people.forEach((name) => {
+          if (NEW_MEDIA_TEAM_SET.has(name)) return;
+          const current = totals.get(name);
+          if (!current) return;
+          current.micro += rewardShare;
+          current.justNow += justNowShare;
+        });
+      });
+      (["remix", "original"] as Category[]).forEach((category) => {
+        day.sections[category].forEach((entry) => {
+          const people = entryPeople(entry, day, data.members).filter((name) => NEWS_CENTER_TEAM_SET.has(name));
+          if (!people.length) return;
+          const share = entryPoints(category, entry, monthlyVideoRewards.get(entry.id) ?? 0) / people.length;
+          people.forEach((name) => {
+            if (NEW_MEDIA_TEAM_SET.has(name)) return;
+            const current = totals.get(name);
+            if (current) current.video += share;
+          });
+        });
+      });
+    });
+    return NEWS_CENTER_TEAM.map((name, index) => {
+      const current = totals.get(name) ?? { micro: 0, video: 0, justNow: 0 };
+      const micro = round(current.micro);
+      const video = round(current.video);
+      const justNow = round(current.justNow);
+      return {
+        name,
+        order: index + 1,
+        forwardCount: DEFAULT_FORWARD_COUNT,
+        forward: DEFAULT_FORWARD_POINTS,
+        micro,
+        video,
+        justNow,
+        total: round(DEFAULT_FORWARD_POINTS + micro + video + justNow),
+      };
+    });
+  }, [data, monthlyVideoRewards, visibleDays]);
+
   const totalEntries = useMemo(() => {
     if (!data) return 0;
     return visibleDays.reduce(
@@ -521,8 +639,10 @@ export default function Home() {
   }, [data, visibleDays]);
 
   const totalPoints = useMemo(
-    () => scores.reduce((sum, person) => sum + person.total, 0),
-    [scores],
+    () =>
+      scores.filter((person) => NEW_MEDIA_TEAM_SET.has(person.name)).reduce((sum, person) => sum + person.total, 0) +
+      newsCenterScores.reduce((sum, person) => sum + person.total, 0),
+    [newsCenterScores, scores],
   );
 
   const scoreGroups = useMemo(
@@ -533,14 +653,6 @@ export default function Home() {
         description: "指定新媒体人员 · 按当月串单计算工分排名",
         people: scores
           .filter((person) => NEW_MEDIA_TEAM_SET.has(person.name))
-          .map((person, index) => ({ person, rank: index + 1 })),
-      },
-      {
-        key: "news-center",
-        title: "新闻中心绩效",
-        description: "其余串单参与人员 · 按当月串单计算工分排名",
-        people: scores
-          .filter((person) => !NEW_MEDIA_TEAM_SET.has(person.name))
           .map((person, index) => ({ person, rank: index + 1 })),
       },
     ],
@@ -561,23 +673,30 @@ export default function Home() {
     [filteredScoreGroups],
   );
 
+  const filteredNewsCenterScores = useMemo(
+    () => newsCenterScores.filter((person) => person.name.includes(personQuery.trim())),
+    [newsCenterScores, personQuery],
+  );
+
   const rankedScores = useMemo(
     () => scoreGroups.flatMap((group) => group.people.map((item) => ({ ...item, group: group.title }))),
     [scoreGroups],
   );
 
   const focusedPerson = useMemo(() => {
-    const exact = scores.find((person) => person.name === personQuery.trim());
+    const exact = scores.find((person) => person.name === personQuery.trim()) ??
+      newsCenterScores.find((person) => person.name === personQuery.trim());
     if (exact) return exact.name;
     return personQuery.trim() && filteredScores.length === 1 ? filteredScores[0].person.name : "";
-  }, [filteredScores, personQuery, scores]);
+  }, [filteredScores, newsCenterScores, personQuery, scores]);
 
   const personTasks = useMemo<PersonTask[]>(() => {
     if (!data || !focusedPerson) return [];
     const tasks: PersonTask[] = [];
+    const isNewMediaPerson = NEW_MEDIA_TEAM_SET.has(focusedPerson);
     visibleDays.forEach((day) => {
       const dutyPeople = peopleFor(day.dutyEditor, data.members);
-      if (dutyPeople.includes(focusedPerson)) {
+      if (isNewMediaPerson && dutyPeople.includes(focusedPerson)) {
         tasks.push({
           date: day.date,
           category: "duty",
@@ -604,6 +723,19 @@ export default function Home() {
           const people = entryPeople(entry, day, data.members);
           if (!people.includes(focusedPerson)) return;
           const rewardPoints = monthlyVideoRewards.get(entry.id) ?? 0;
+          if (!isNewMediaPerson && category === "wechat") {
+            const total = microReadingReward(entry.views) + justNowPoints(entry.duration);
+            if (!total) return;
+            tasks.push({
+              date: day.date,
+              category,
+              entry,
+              totalPoints: total,
+              personalPoints: total / people.length,
+              rewardPoints: microReadingReward(entry.views),
+            });
+            return;
+          }
           const total = entryPoints(category, entry, rewardPoints);
           tasks.push({
             date: day.date,
@@ -616,6 +748,38 @@ export default function Home() {
         });
       });
     });
+    if (isNewMediaPerson) {
+      const editorWeeks = new Map<string, { days: number; firstDate: string }>();
+      visibleDays.forEach((day) => {
+        const editors = peopleFor(day.wechatEditor, data.members);
+        if (!editors.includes(focusedPerson)) return;
+        const start = weekStart(day.date);
+        const current = editorWeeks.get(start) ?? { days: 0, firstDate: day.date };
+        current.days += 1 / editors.length;
+        editorWeeks.set(start, current);
+      });
+      editorWeeks.forEach(({ days, firstDate }, start) => {
+        const points = round((days / 7) * WECHAT_WEEKLY_POINTS);
+        tasks.push({
+          date: firstDate,
+          category: "wechat",
+          entry: {
+            id: `${start}-wechat-weekly-${focusedPerson}`,
+            title: `微信公众号值班小编（${start}起，折算${formatPoints(days)}天）`,
+            staff: focusedPerson,
+            views: "",
+            duration: "",
+            manualPoints: points,
+            sourcePoints: points,
+            notes: "¥1,200/周，按当月实际值班天数折算",
+            taskType: "wechat_weekly",
+          },
+          totalPoints: points,
+          personalPoints: points,
+          rewardPoints: 0,
+        });
+      });
+    }
     return tasks.sort((a, b) => a.date.localeCompare(b.date));
   }, [data, focusedPerson, monthlyVideoRewards, visibleDays]);
 
@@ -687,17 +851,37 @@ export default function Home() {
     if (!data) return;
     if (view === "summary") {
       const rows = [
-        ["绩效分类", "分类内排名", "姓名", "值班责编（分）", "微信（分）", "二创（分）", "原创（分）", "参与任务", "串单计算（分）", "折合人民币"],
+        ["绩效分类", "序号/排名", "姓名", "微信转发", "微刊（分）", "短视频（分）", "刚刚帖（分）", "值班责编（分）", "新媒体微信（分）", "二创（分）", "原创（分）", "参与任务", "合计（分）", "折合人民币"],
         ...rankedScores.map(({ person, rank, group }) => [
           group,
           rank,
           person.name,
+          "",
+          "",
+          "",
+          "",
           formatPoints(person.duty),
           formatPoints(person.wechat),
           formatPoints(person.remix),
           formatPoints(person.original),
           person.pieces,
           formatPoints(person.total),
+          formatMoney(person.total),
+        ]),
+        ...newsCenterScores.map((person) => [
+          "新闻中心绩效",
+          person.order,
+          person.name,
+          `${person.forwardCount}条 / ${formatPoints(person.forward)}分`,
+          person.micro,
+          person.video,
+          person.justNow,
+          "",
+          "",
+          "",
+          "",
+          "",
+          person.total,
           formatMoney(person.total),
         ]),
       ];
@@ -1256,7 +1440,7 @@ export default function Home() {
                 <div className="duty-pay">
                   <span>值班责编绩效</span>
                   <strong>1B / 天 · ¥200</strong>
-                  <small>公众号值班小编 ¥1,200 / 周</small>
+                  <small>公众号值班小编 ¥1,200 / 周 = 48分/周，按天折算至0.1分</small>
                 </div>
               </div>
               <div className="stat-grid">
@@ -1272,8 +1456,8 @@ export default function Home() {
                 </div>
                 <div className="stat-card">
                   <span>汇总人员</span>
-                  <strong>{scores.length}</strong>
-                  <small>人</small>
+                  <strong>{NEW_MEDIA_TEAM.length + NEWS_CENTER_TEAM.length}</strong>
+                  <small>15名新媒体 + 45名新闻中心</small>
                 </div>
                 <div className="stat-card">
                   <span>当月天数</span>
@@ -1284,7 +1468,7 @@ export default function Home() {
               <div className="score-toolbar">
                 <div>
                   <h3>个人工分明细</h3>
-                  <p>两类人员分别排名；最终名次和人民币均以串单计算工分为准</p>
+                  <p>新媒体人员按工分排名；新闻中心按指定名单顺序汇总</p>
                 </div>
                 <div className="score-actions">
                   <label className="person-search">
@@ -1367,6 +1551,61 @@ export default function Home() {
                     </div>
                   );
                 })}
+                <div className="score-card performance-card news-center">
+                  <div className="score-card-heading">
+                    <div>
+                      <span className="performance-label">NEWS CENTER</span>
+                      <h3>新闻中心绩效</h3>
+                      <p>固定名单顺序 · 微信转发每人默认40条/1.6分</p>
+                    </div>
+                    <div className="group-total">
+                      <span>{NEWS_CENTER_TEAM.length} 人 · {formatPoints(newsCenterScores.reduce((sum, person) => sum + person.total, 0))} 分</span>
+                      <strong>{formatMoney(newsCenterScores.reduce((sum, person) => sum + person.total, 0))}</strong>
+                    </div>
+                  </div>
+                  <div className="score-table-wrap">
+                    <table className="score-table news-center-table">
+                      <thead>
+                        <tr>
+                          <th>序号</th>
+                          <th>姓名</th>
+                          <th>微信转发</th>
+                          <th>微刊</th>
+                          <th>短视频</th>
+                          <th>刚刚帖</th>
+                          <th>合计</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredNewsCenterScores.map((person) => (
+                          <tr
+                            key={person.name}
+                            className={focusedPerson === person.name ? "person-selected" : "person-row"}
+                            onClick={() => setPersonQuery(person.name)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") setPersonQuery(person.name);
+                            }}
+                            tabIndex={0}
+                          >
+                            <td><span className="fixed-order">{person.order}</span></td>
+                            <td>
+                              <strong>{person.name}</strong>
+                              {NEW_MEDIA_TEAM_SET.has(person.name) && <small className="new-media-note">仅保留转发分</small>}
+                            </td>
+                            <td><strong>{person.forwardCount}条 · {formatPoints(person.forward)}分</strong></td>
+                            <td>{formatPoints(person.micro)}</td>
+                            <td>{formatPoints(person.video)}</td>
+                            <td>{formatPoints(person.justNow)}</td>
+                            <td><strong className="total-score">{formatPoints(person.total)}</strong></td>
+                          </tr>
+                        ))}
+                        {!filteredNewsCenterScores.length && (
+                          <tr><td className="no-person-result" colSpan={7}>此表没有找到“{personQuery}”</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
               {focusedPerson && (
                 <div className="person-detail-card">
@@ -1445,7 +1684,7 @@ export default function Home() {
               <span>D=2分/¥50 · C=5分/¥125 · B=8分/¥200 · A=12分/¥300</span>
             </div>
             <ol className="standards-list">
-              <li><strong>新武夷微信公众号值班</strong><span>¥1,200 / 周</span></li>
+              <li><strong>新武夷微信公众号值班</strong><span>¥1,200 / 周 = 48工分/周；跨月或不足一周按实际值班天数折算，四舍五入至0.1分</span></li>
               <li><strong>当日值班责编</strong><span>1B / 天（8分，¥200），填写姓名后自动计入</span></li>
               <li><strong>短视频编辑</strong><span>1D / 条（2分，¥50）</span></li>
               <li><strong>新闻活动类外采短视频</strong><span>1C / 条（5分，¥125）</span></li>

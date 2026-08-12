@@ -1318,6 +1318,30 @@ td textarea:focus {
   table-layout: auto;
 }
 
+.news-center-table {
+  min-width: 820px;
+}
+
+.fixed-order {
+  display: inline-grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.new-media-note {
+  display: block;
+  margin-top: 3px;
+  color: var(--orange);
+  font-size: 8px;
+  font-weight: 600;
+}
+
 .person-row,
 .person-selected {
   cursor: pointer;
