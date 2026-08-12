@@ -40,6 +40,19 @@ type NewsCenterScore = {
 
 type MicroReward = { title: string; views: string; staff: string; reward: number; notes: string };
 
+type WechatPerformance = {
+  name: string;
+  dutyDays: number;
+  parkHrCount: number;
+};
+
+type VideoPerformance = {
+  name: string;
+  pieces: number;
+  videoPoints: number;
+  dutyDays: number;
+};
+
 type ExportPayload = {
   year: number;
   month: number;
@@ -48,6 +61,9 @@ type ExportPayload = {
   nonMediaScores: NewMediaScore[];
   newsCenterScores: NewsCenterScore[];
   microRewards: MicroReward[];
+  wechatPerformance: WechatPerformance[];
+  videoPerformance: VideoPerformance[];
+  newMediaNames: string[];
 };
 
 type DailyExportPayload = ExportDay;
@@ -237,56 +253,99 @@ function buildRundownSheet(sheet: any, payload: ExportPayload) {
 }
 
 function updateNewMediaSheet(sheet: any, payload: ExportPayload) {
-  sheet.getCell("B26").value = "新媒体人员合计分";
-  const newMediaNameStyle = clone(sheet.getCell("B27").style);
-  const newMediaTotalStyle = clone(sheet.getCell("C27").style);
-  const newMediaHeight = sheet.getRow(27).height;
-  const nonMediaHeaderStyle = Array.from({ length: 6 }, (_, column) => clone(sheet.getCell(37, column + 1).style));
-  const nonMediaHeaderHeight = sheet.getRow(37).height;
-  const nonMediaNameStyle = clone(sheet.getCell("B38").style);
-  const nonMediaTotalStyle = clone(sheet.getCell("C38").style);
-  const nonMediaHeight = sheet.getRow(38).height;
-  if (sheet.getCell("B37").isMerged) sheet.unMergeCells("B37:C37");
-  for (let row = 27; row <= 41; row += 1) {
-    const score = payload.newMediaScores[row - 27];
-    const targetRow = sheet.getRow(row);
-    targetRow.getCell(2).style = clone(newMediaNameStyle);
-    targetRow.getCell(3).style = clone(newMediaTotalStyle);
-    targetRow.getCell(2).value = score?.name ?? "";
-    targetRow.getCell(3).value = score
-      ? { formula: `SUM(${score.duty},${score.wechat},${score.remix},${score.original},${score.fixed})` }
-      : "";
-    if (newMediaHeight !== undefined) targetRow.height = newMediaHeight;
+  const sourceRows = [1, 2, 3, 5, 6, 7, 17, 18, 26, 27, 37, 38];
+  const templateCells: Record<number, any[]> = {};
+  const templateHeights: Record<number, number | undefined> = {};
+  sourceRows.forEach((row) => {
+    templateCells[row] = Array.from({ length: 6 }, (_, column) => clone(sheet.getCell(row, column + 1).style));
+    templateHeights[row] = sheet.getRow(row).height;
+  });
+  const columnWidths = Array.from({ length: 6 }, (_, column) => sheet.getColumn(column + 1).width);
+  Object.values(sheet._merges ?? {}).forEach((merge: any) => {
+    if (merge?.range) sheet.unMergeCells(merge.range);
+  });
+  const previousRowCount = sheet.rowCount;
+  sheet.spliceRows(1, sheet.rowCount);
+  for (let row = 1; row <= previousRowCount; row += 1) {
+    for (let column = 1; column <= 6; column += 1) sheet.getCell(row, column).value = null;
   }
-  const nonMediaHeaderRow = 43;
-  for (let column = 1; column <= 6; column += 1) {
-    const cell = sheet.getCell(nonMediaHeaderRow, column);
-    cell.style = clone(nonMediaHeaderStyle[column - 1]);
-    cell.value = "";
-  }
-  if (nonMediaHeaderHeight !== undefined) sheet.getRow(nonMediaHeaderRow).height = nonMediaHeaderHeight;
-  sheet.mergeCells(`B${nonMediaHeaderRow}:C${nonMediaHeaderRow}`);
-  sheet.getCell(`B${nonMediaHeaderRow}`).value = "非新媒体人员合计分";
-  const firstNonMediaRow = nonMediaHeaderRow + 1;
-  const neededLastRow = firstNonMediaRow + Math.max(15, payload.nonMediaScores.length) - 1;
-  for (let row = firstNonMediaRow; row <= neededLastRow; row += 1) {
-    const score = payload.nonMediaScores[row - firstNonMediaRow];
-    const targetRow = sheet.getRow(row);
-    targetRow.getCell(2).style = clone(nonMediaNameStyle);
-    targetRow.getCell(3).style = clone(nonMediaTotalStyle);
-    targetRow.getCell(2).value = score?.name ?? "";
-    targetRow.getCell(3).value = score?.total ?? "";
-    if (nonMediaHeight !== undefined) targetRow.height = nonMediaHeight;
-  }
+
+  const writeRow = (sourceRow: number, targetRow: number, values: unknown[]) => {
+    const target = sheet.getRow(targetRow);
+    for (let column = 1; column <= 6; column += 1) {
+      const cell = target.getCell(column);
+      cell.style = clone(templateCells[sourceRow][column - 1]);
+      cell.value = null;
+      cell.value = values[column - 1] ?? "";
+    }
+    if (templateHeights[sourceRow] !== undefined) target.height = templateHeights[sourceRow];
+  };
+  const mergeTitle = (row: number) => sheet.mergeCells(row, 1, row, 6);
+  let row = 1;
+
+  writeRow(1, row, ["微信公众号绩效"]); mergeTitle(row); row += 1;
+  writeRow(2, row, ["姓名", "系数", "基础绩效（分/周）", "工业园区/人社局微刊（次）", "公众号值班天数", "合计（分）"]); row += 1;
+  payload.wechatPerformance.forEach((person) => {
+    writeRow(3, row, [
+      person.name,
+      1,
+      48,
+      person.parkHrCount,
+      person.dutyDays,
+      { formula: `ROUND(C${row}*B${row}/7*E${row}+D${row}*6,1)` },
+    ]);
+    row += 1;
+  });
+  row += 1;
+
+  writeRow(5, row, ["抖音、视频号绩效"]); mergeTitle(row); row += 1;
+  writeRow(6, row, ["姓名", "系数1", "条数", "工分", "责编天数", "合计（分）"]); row += 1;
+  payload.videoPerformance.forEach((person) => {
+    writeRow(7, row, [
+      person.name,
+      1,
+      person.pieces,
+      person.videoPoints,
+      person.dutyDays,
+      { formula: `ROUND(D${row}*B${row}+E${row}*8,1)` },
+    ]);
+    row += 1;
+  });
+  row += 1;
+
+  writeRow(17, row, ["其他绩效"]); mergeTitle(row); row += 1;
   const bonusRows = [
-    [18, "周婷", "【新闻回看】视频回看每日上传绩效：24分；", 24],
-    [20, "刘乐", "新闻节目上传：36分", 36],
-    [22, "吴轲宇", "接听指令电话", 20],
+    ["周婷", "【新闻回看】视频回看每日上传绩效：24分", 24],
+    ["刘乐", "新闻节目上传：36分", 36],
+    ["吴轲宇", "接听指令电话：20分", 20],
   ] as const;
-  bonusRows.forEach(([row, name, label, points]) => {
-    sheet.getCell(`A${row}`).value = name;
-    sheet.getCell(`B${row}`).value = label;
-    sheet.getCell(`F${row}`).value = points;
+  bonusRows.forEach(([name, label, points]) => {
+    writeRow(18, row, [name, label, "", "", "", points]);
+    sheet.mergeCells(row, 2, row, 5);
+    row += 1;
+  });
+  row += 1;
+
+  writeRow(26, row, ["", "新媒体人员合计分"]);
+  sheet.mergeCells(row, 2, row, 3);
+  row += 1;
+  payload.newMediaScores.forEach((score) => {
+    writeRow(27, row, ["", score.name, { formula: `ROUND(SUM(${score.duty},${score.wechat},${score.remix},${score.original},${score.fixed}),1)` }]);
+    row += 1;
+  });
+  row += 1;
+
+  writeRow(37, row, ["", "非新媒体人员合计分"]);
+  sheet.mergeCells(row, 2, row, 3);
+  row += 1;
+  payload.nonMediaScores.forEach((score) => {
+    writeRow(38, row, ["", score.name, score.total]);
+    row += 1;
+  });
+  if (!payload.nonMediaScores.length) writeRow(38, row, ["", "", 0]);
+
+  columnWidths.forEach((width, column) => {
+    if (width !== undefined) sheet.getColumn(column + 1).width = width;
   });
 }
 
@@ -314,24 +373,46 @@ function updateMicroSheet(sheet: any, payload: ExportPayload) {
 
 function updateNewsCenterSheet(sheet: any, payload: ExportPayload) {
   sheet.getCell("A1").value = `${payload.month}月新媒体工分`;
+  const bodyStyles = Array.from({ length: 7 }, (_, column) => clone(sheet.getCell(3, column + 1).style));
+  const bodyHeight = sheet.getRow(3).height;
+  const totalStyles = Array.from({ length: 7 }, (_, column) => clone(sheet.getCell(48, column + 1).style));
+  const totalHeight = sheet.getRow(48).height;
+  for (let row = 3; row <= sheet.rowCount; row += 1) {
+    for (let column = 1; column <= 7; column += 1) sheet.getCell(row, column).value = null;
+  }
   payload.newsCenterScores.forEach((person, index) => {
     const row = index + 3;
-    const values = [person.order, person.name, person.forwardCount, person.micro || "", person.video || "", person.justNow || ""];
+    const isNewMedia = payload.newMediaNames.includes(person.name);
+    const values = [
+      person.order,
+      person.name,
+      person.forwardCount,
+      isNewMedia ? 0 : person.micro || 0,
+      isNewMedia ? 0 : person.video || 0,
+      isNewMedia ? 0 : person.justNow || 0,
+    ];
     values.forEach((value, column) => {
-      sheet.getCell(row, column + 1).value = value;
+      const cell = sheet.getCell(row, column + 1);
+      cell.style = clone(bodyStyles[column]);
+      cell.value = null;
+      cell.value = value;
     });
-    sheet.getCell(`G${row}`).value = { formula: `C${row}/25+F${row}+E${row}+D${row}` };
+    if (bodyHeight !== undefined) sheet.getRow(row).height = bodyHeight;
+    sheet.getCell(`G${row}`).style = clone(bodyStyles[6]);
+    sheet.getCell(`G${row}`).value = { formula: `C${row}/25+E${row}+F${row}` };
   });
   const totalRow = payload.newsCenterScores.length + 3;
+  for (let column = 1; column <= 7; column += 1) {
+    const cell = sheet.getCell(totalRow, column);
+    cell.style = clone(totalStyles[column - 1]);
+    cell.value = null;
+    cell.value = "";
+  }
+  if (totalHeight !== undefined) sheet.getRow(totalRow).height = totalHeight;
   sheet.getCell(`G${totalRow}`).value = { formula: `SUM(G3:G${totalRow - 1})` };
 }
 
-export async function exportMonthlyWorkbook(payload: ExportPayload) {
-  const ExcelJS = (await import("exceljs")).default;
-  const response = await fetch(`${import.meta.env.BASE_URL}monthly-performance-template.xlsx`);
-  if (!response.ok) throw new Error("无法读取月度导出模板");
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(await response.arrayBuffer());
+export function populateMonthlyWorkbook(workbook: any, payload: ExportPayload) {
   const [rundownSheet, performanceSheet, microSheet, newsSheet] = workbook.worksheets;
   if (!rundownSheet || !performanceSheet || !microSheet || !newsSheet) throw new Error("月度模板必须包含四个工作表");
   const originalSheetNames = workbook.worksheets.map((sheet: any) => sheet.name);
@@ -347,6 +428,16 @@ export async function exportMonthlyWorkbook(payload: ExportPayload) {
     sheet.name = originalSheetNames[index].replace(/^7月/, `${payload.month}月`);
   });
   workbook.calcProperties.fullCalcOnLoad = true;
+  return workbook;
+}
+
+export async function exportMonthlyWorkbook(payload: ExportPayload) {
+  const ExcelJS = (await import("exceljs")).default;
+  const response = await fetch(`${import.meta.env.BASE_URL}monthly-performance-template.xlsx`);
+  if (!response.ok) throw new Error("无法读取月度导出模板");
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await response.arrayBuffer());
+  populateMonthlyWorkbook(workbook, payload);
   const content = await workbook.xlsx.writeBuffer();
   const blob = new Blob([content as BlobPart], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   const url = URL.createObjectURL(blob);

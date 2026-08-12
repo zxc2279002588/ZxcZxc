@@ -1052,6 +1052,59 @@ export default function Home() {
   async function exportTotalWorkbook() {
     if (!data) return;
     try {
+      const wechatPerformanceMap = new Map<string, { dutyDays: number; parkHrCount: number }>();
+      WECHAT_EDITOR_CANDIDATES.forEach((name) => wechatPerformanceMap.set(name, { dutyDays: 0, parkHrCount: 0 }));
+      const videoPerformanceMap = new Map<string, { pieces: number; videoPoints: number; dutyDays: number }>();
+      NEW_MEDIA_TEAM.forEach((name) => videoPerformanceMap.set(name, { pieces: 0, videoPoints: 0, dutyDays: 0 }));
+
+      visibleDays.forEach((day) => {
+        const wechatEditors = peopleFor(day.wechatEditor, data.members);
+        wechatEditors.forEach((name) => {
+          const current = wechatPerformanceMap.get(name) ?? { dutyDays: 0, parkHrCount: 0 };
+          current.dutyDays += 1 / wechatEditors.length;
+          wechatPerformanceMap.set(name, current);
+        });
+        const parkHrEntries = day.sections.wechat.filter((entry) => entry.taskType === "park_hr_micro");
+        wechatEditors.forEach((name) => {
+          const current = wechatPerformanceMap.get(name) ?? { dutyDays: 0, parkHrCount: 0 };
+          current.parkHrCount += parkHrEntries.length / wechatEditors.length;
+          wechatPerformanceMap.set(name, current);
+        });
+
+        const allDutyEditors = peopleFor(day.dutyEditor, data.members);
+        allDutyEditors.filter((name) => NEW_MEDIA_TEAM_SET.has(name)).forEach((name) => {
+          const current = videoPerformanceMap.get(name)!;
+          current.dutyDays += 1 / allDutyEditors.length;
+        });
+        (["remix", "original"] as Category[]).forEach((category) => {
+          day.sections[category].forEach((entry) => {
+            const allPeople = entryPeople(entry, day, data.members);
+            if (!allPeople.length) return;
+            const share = entryPoints(category, entry, monthlyVideoRewards.get(entry.id) ?? 0) / allPeople.length;
+            allPeople.filter((name) => NEW_MEDIA_TEAM_SET.has(name)).forEach((name) => {
+              const current = videoPerformanceMap.get(name)!;
+              current.pieces += 1;
+              current.videoPoints += share;
+            });
+          });
+        });
+      });
+
+      const exportNewsCenterScores = [...newsCenterScores];
+      NEW_MEDIA_TEAM.forEach((name) => {
+        if (exportNewsCenterScores.some((person) => person.name === name)) return;
+        exportNewsCenterScores.push({
+          name,
+          order: exportNewsCenterScores.length + 1,
+          forwardCount: DEFAULT_FORWARD_COUNT,
+          forward: DEFAULT_FORWARD_POINTS,
+          micro: 0,
+          video: 0,
+          justNow: 0,
+          total: DEFAULT_FORWARD_POINTS,
+        });
+      });
+
       await exportMonthlyWorkbook({
         year: selectedYear,
         month: selectedMonth,
@@ -1079,19 +1132,37 @@ export default function Home() {
         nonMediaScores: scores
           .filter((person) => !NEW_MEDIA_TEAM_SET.has(person.name) && person.total > 0)
           .map((person, index) => ({ ...person, rank: index + 1 })),
-        newsCenterScores,
+        newsCenterScores: exportNewsCenterScores,
         microRewards: visibleDays.flatMap((day) => day.sections.wechat.flatMap((entry) => {
           const views = parseViews(entry.views);
           if (views <= 5000) return [];
+          const authors = peopleFor(entry.staff, data.members);
+          if (!authors.length) return [];
           const reward = microReadingReward(entry.views);
           return [{
             title: entry.title,
             views,
-            staff: entry.taskType === "park_hr_micro" ? day.wechatEditor : entry.staff,
+            staff: authors.join("、"),
             reward,
             notes: entry.notes,
           }];
         })),
+        wechatPerformance: [...wechatPerformanceMap.entries()]
+          .map(([name, performance]) => ({
+            name,
+            dutyDays: round(performance.dutyDays),
+            parkHrCount: round(performance.parkHrCount),
+          })),
+        videoPerformance: NEW_MEDIA_TEAM.map((name) => {
+          const performance = videoPerformanceMap.get(name)!;
+          return {
+            name,
+            pieces: round(performance.pieces),
+            videoPoints: round(performance.videoPoints),
+            dutyDays: round(performance.dutyDays),
+          };
+        }),
+        newMediaNames: [...NEW_MEDIA_TEAM],
       });
       setToast(`已导出 ${selectedYear}年${selectedMonth}月绩效`);
     } catch (error) {
