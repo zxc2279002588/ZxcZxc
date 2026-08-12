@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { parseExcelFile } from "./excel-import";
+import { exportMonthlyWorkbook } from "./excel-export";
 
 type Category = "wechat" | "remix" | "original";
-type TaskCategory = Category | "duty";
+type TaskCategory = Category | "duty" | "bonus";
 type TaskType =
   | "wechat_article"
   | "video_edit"
@@ -19,7 +20,10 @@ type TaskType =
   | "park_hr_micro"
   | "duty_editor"
   | "wechat_weekly"
-  | "wechat_forward";
+  | "wechat_forward"
+  | "video_replay_upload"
+  | "news_program_upload"
+  | "command_phone";
 
 type Entry = {
   id: string;
@@ -42,6 +46,10 @@ type Day = {
   supervisor: string;
   sections: Record<Category, Entry[]>;
 };
+
+function exportEntryPoints(category: Category, entry: Entry, reward = 0) {
+  return entryPoints(category, entry, reward);
+}
 
 type LegacyDay = Omit<Day, "wechatEditor" | "dutyEditor" | "dutyDirector" | "supervisor"> &
   Partial<Pick<Day, "wechatEditor" | "dutyEditor" | "dutyDirector" | "supervisor">> & {
@@ -67,6 +75,7 @@ type PersonScore = {
   wechat: number;
   remix: number;
   original: number;
+  fixed: number;
   total: number;
   pieces: number;
 };
@@ -130,6 +139,11 @@ const ADMIN_SESSION_MS = 2 * 60 * 60 * 1000;
 const ADMIN_PASSWORD_HASH = "5600715f42bf51c40dc330d750cd996f58fead4ddea56466ce7498d17801b3a5";
 const DUTY_EDITOR_CANDIDATES = ["张瑞君", "周婷", "张笑弛"] as const;
 const WECHAT_EDITOR_CANDIDATES = ["王馨", "吴轲宇", "高洁"] as const;
+const MONTHLY_FIXED_BONUSES = new Map<string, { taskType: TaskType; points: number }>([
+  ["周婷", { taskType: "video_replay_upload", points: 24 }],
+  ["刘乐", { taskType: "news_program_upload", points: 36 }],
+  ["吴轲宇", { taskType: "command_phone", points: 20 }],
+]);
 
 const categoryMeta: Record<
   Category,
@@ -170,10 +184,13 @@ const taskMeta: Record<TaskType, { label: string; unit: string; points: number }
   duty_editor: { label: "值班责编", unit: "1B/天", points: 8 },
   wechat_weekly: { label: "微信公众号值班小编", unit: "¥1,200/周", points: WECHAT_WEEKLY_POINTS },
   wechat_forward: { label: "微信转发", unit: "默认40条/1.6分", points: DEFAULT_FORWARD_POINTS },
+  video_replay_upload: { label: "视频回看每日上传", unit: "24分/月", points: 24 },
+  news_program_upload: { label: "新闻节目上传", unit: "36分/月", points: 36 },
+  command_phone: { label: "接听指令电话", unit: "20分/月", points: 20 },
 };
 
 const entryTaskTypes = (Object.keys(taskMeta) as TaskType[]).filter(
-  (taskType) => !["duty_editor", "wechat_weekly", "wechat_forward"].includes(taskType),
+  (taskType) => !["duty_editor", "wechat_weekly", "wechat_forward", "video_replay_upload", "news_program_upload", "command_phone"].includes(taskType),
 );
 
 function defaultTaskType(category: Category): TaskType {
@@ -584,6 +601,7 @@ export default function Home() {
           wechat: 0,
           remix: 0,
           original: 0,
+          fixed: 0,
           total: 0,
           pieces: 0,
         };
@@ -604,6 +622,7 @@ export default function Home() {
               wechat: 0,
               remix: 0,
               original: 0,
+              fixed: 0,
               total: 0,
               pieces: 0,
             };
@@ -636,6 +655,7 @@ export default function Home() {
         wechat: 0,
         remix: 0,
         original: 0,
+        fixed: 0,
         total: 0,
         pieces: 0,
       };
@@ -652,10 +672,18 @@ export default function Home() {
           wechat: 0,
           remix: 0,
           original: 0,
+          fixed: 0,
           total: 0,
           pieces: 0,
         });
       }
+    });
+    MONTHLY_FIXED_BONUSES.forEach(({ points }, name) => {
+      const current = totals.get(name);
+      if (!current) return;
+      current.fixed += points;
+      current.total += points;
+      current.pieces += 1;
     });
     return [...totals.values()].sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, "zh-CN"));
   }, [data, monthlyVideoRewards, visibleDays]);
@@ -862,6 +890,27 @@ export default function Home() {
           rewardPoints: 0,
         });
       });
+      const fixedBonus = MONTHLY_FIXED_BONUSES.get(focusedPerson);
+      if (fixedBonus) {
+        tasks.push({
+          date: dateKey(selectedYear, selectedMonth, 1),
+          category: "bonus",
+          entry: {
+            id: `${monthKey(selectedYear, selectedMonth)}-${fixedBonus.taskType}`,
+            title: taskMeta[fixedBonus.taskType].label,
+            staff: focusedPerson,
+            views: "",
+            duration: "",
+            manualPoints: fixedBonus.points,
+            sourcePoints: fixedBonus.points,
+            notes: "每月固定绩效",
+            taskType: fixedBonus.taskType,
+          },
+          totalPoints: fixedBonus.points,
+          personalPoints: fixedBonus.points,
+          rewardPoints: 0,
+        });
+      }
     }
     return tasks.sort((a, b) => a.date.localeCompare(b.date));
   }, [data, focusedPerson, monthlyVideoRewards, visibleDays]);
@@ -938,7 +987,7 @@ export default function Home() {
     if (!data) return;
     if (view === "summary") {
       const rows = [
-        ["绩效分类", "序号/排名", "姓名", "微信转发", "微刊（分）", "短视频（分）", "刚刚帖（分）", "值班责编（分）", "新媒体微信（分）", "二创（分）", "原创（分）", "参与任务", "合计（分）", "折合人民币"],
+        ["绩效分类", "序号/排名", "姓名", "微信转发", "微刊（分）", "短视频（分）", "刚刚帖（分）", "值班责编（分）", "新媒体微信（分）", "二创（分）", "原创（分）", "固定月绩效（分）", "参与任务", "合计（分）", "折合人民币"],
         ...rankedScores.map(({ person, rank, group }) => [
           group,
           rank,
@@ -951,6 +1000,7 @@ export default function Home() {
           formatPoints(person.wechat),
           formatPoints(person.remix),
           formatPoints(person.original),
+          formatPoints(person.fixed),
           person.pieces,
           formatPoints(person.total),
           formatMoney(person.total),
@@ -963,6 +1013,7 @@ export default function Home() {
           person.micro,
           person.video,
           person.justNow,
+          "",
           "",
           "",
           "",
@@ -1026,6 +1077,34 @@ export default function Home() {
       rows.map((row) => row.map(csvCell).join(",")).join("\n"),
       "text/csv;charset=utf-8",
     );
+  }
+
+  async function exportTotalWorkbook() {
+    if (!data) return;
+    try {
+      await exportMonthlyWorkbook({
+        year: selectedYear,
+        month: selectedMonth,
+        days: visibleDays.map((day) => ({
+          ...day,
+          sections: {
+            wechat: day.sections.wechat.map((entry) => ({ ...entry, exportPoints: exportEntryPoints("wechat", entry) })),
+            remix: day.sections.remix.map((entry) => ({ ...entry, exportPoints: exportEntryPoints("remix", entry, monthlyVideoRewards.get(entry.id) ?? 0) })),
+            original: day.sections.original.map((entry) => ({ ...entry, exportPoints: exportEntryPoints("original", entry, monthlyVideoRewards.get(entry.id) ?? 0) })),
+          },
+        })),
+        newMediaScores: scoreGroups[0].people.map(({ person, rank }) => ({ ...person, rank })),
+        newsCenterScores,
+        microRewards: visibleDays.flatMap((day) => day.sections.wechat.flatMap((entry) => {
+          const reward = microReadingReward(entry.views);
+          if (!reward) return [];
+          return [{ title: entry.title, views: entry.views, staff: entry.staff, reward, notes: entry.notes }];
+        })),
+      });
+      setToast(`已导出 ${selectedYear}年${selectedMonth}月 工分与串单总表`);
+    } catch (error) {
+      window.alert(`总导出失败：${error instanceof Error ? error.message : "模板无法读取"}`);
+    }
   }
 
   async function handleExcelImport(file: File, mode: ImportMode) {
@@ -1660,6 +1739,7 @@ export default function Home() {
                     {personQuery && <button onClick={() => setPersonQuery("")} aria-label="清除检索">×</button>}
                   </label>
                   <button className="ghost-button" onClick={exportCsv}>导出汇总</button>
+                  <button className="primary-button total-export-button" onClick={() => void exportTotalWorkbook()}>总导出 Excel</button>
                 </div>
               </div>
               <div className="performance-groups">
@@ -1689,6 +1769,7 @@ export default function Home() {
                               <th>微信</th>
                               <th>二创</th>
                               <th>原创</th>
+                              <th>固定月绩效</th>
                               <th>参与条数</th>
                               <th>串单计算</th>
                               <th>折合人民币</th>
@@ -1705,12 +1786,18 @@ export default function Home() {
                                 }}
                                 tabIndex={0}
                               >
-                                <td><span className={`rank rank-${rank}`}>{rank}</span></td>
+                                <td>
+                                  <span className={`rank rank-${rank}`}>
+                                    {rank === 1 && <b className="crown" aria-label="本月工分冠军">♛</b>}
+                                    {rank}
+                                  </span>
+                                </td>
                                 <td><strong>{person.name}</strong></td>
                                 <td>{formatPoints(person.duty)}</td>
                                 <td>{formatPoints(person.wechat)}</td>
                                 <td>{formatPoints(person.remix)}</td>
                                 <td>{formatPoints(person.original)}</td>
+                                <td>{formatPoints(person.fixed)}</td>
                                 <td>{person.pieces}</td>
                                 <td><strong className="total-score">{formatPoints(person.total)}</strong></td>
                                 <td><strong className="money-score">{formatMoney(person.total)}</strong></td>
@@ -1718,7 +1805,7 @@ export default function Home() {
                             ))}
                             {!group.people.length && (
                               <tr>
-                                <td className="no-person-result" colSpan={9}>
+                                <td className="no-person-result" colSpan={10}>
                                   {personQuery ? `此表没有找到“${personQuery}”` : "本月暂无串单工分"}
                                 </td>
                               </tr>
@@ -1813,13 +1900,13 @@ export default function Home() {
                           {personTasks.map((task) => {
                             const taskType =
                               task.entry.taskType ??
-                              (task.category === "duty" ? "duty_editor" : defaultTaskType(task.category));
+                              (task.category === "duty" ? "duty_editor" : task.category === "bonus" ? "video_replay_upload" : defaultTaskType(task.category));
                             return (
                               <tr key={`${task.date}-${task.entry.id}`}>
                                 <td>{Number(task.date.slice(-2))}日</td>
                                 <td>
                                   <span className={`category-pill ${task.category}`}>
-                                    {task.category === "duty" ? "值班" : categoryMeta[task.category].short}
+                                    {task.category === "duty" ? "值班" : task.category === "bonus" ? "固定" : categoryMeta[task.category].short}
                                   </span>
                                 </td>
                                 <td>
