@@ -11,6 +11,7 @@ type ExportDay = {
   date: string;
   weekday: string;
   wechatEditor: string;
+  videoEditor: string;
   dutyEditor: string;
   dutyDirector: string;
   supervisor: string;
@@ -48,6 +49,8 @@ type ExportPayload = {
   microRewards: MicroReward[];
 };
 
+type DailyExportPayload = ExportDay;
+
 function clone<T>(value: T): T {
   return value === undefined ? value : JSON.parse(JSON.stringify(value));
 }
@@ -68,6 +71,133 @@ function copyStyledRow(XLSX: any, sheet: any, templates: Record<number, any[]>, 
     const address = XLSX.utils.encode_cell({ r: targetRow - 1, c: column });
     writeCell(sheet, address, values[column] ?? "", styleCells[column]);
   }
+}
+
+function dailyBodySourceRow(category: "wechat" | "remix" | "original", index: number) {
+  if (category === "wechat") return index === 0 ? 4 : index < 4 ? 5 : 8;
+  if (category === "remix") return index === 0 ? 11 : 12;
+  return index === 0 ? 15 : 16;
+}
+
+function buildDailySheet(sheet: any, day: DailyExportPayload) {
+  const sourceRows = [1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
+  const templateCells: Record<number, any[]> = {};
+  const templateHeights: Record<number, number | undefined> = {};
+  sourceRows.forEach((row) => {
+    templateCells[row] = Array.from({ length: 7 }, (_, column) => clone(sheet.getRow(row).getCell(column + 1).style));
+    templateHeights[row] = sheet.getRow(row).height;
+  });
+  const columnWidths = Array.from({ length: 7 }, (_, column) => sheet.getColumn(column + 1).width);
+  Object.values(sheet._merges ?? {}).forEach((merge: any) => {
+    if (merge?.range) sheet.unMergeCells(merge.range);
+  });
+  sheet.spliceRows(1, sheet.rowCount);
+  const writeRow = (sourceRow: number, targetRow: number, values: unknown[]) => {
+    const target = sheet.getRow(targetRow);
+    for (let column = 1; column <= 7; column += 1) {
+      const cell = target.getCell(column);
+      cell.style = clone(templateCells[sourceRow][column - 1]);
+      cell.value = values[column - 1] ?? "";
+    }
+    if (templateHeights[sourceRow] !== undefined) target.height = templateHeights[sourceRow];
+  };
+  const merge = (row: number) => sheet.mergeCells(row, 1, row, 7);
+
+  const [year, month, date] = day.date.split("-").map(Number);
+  let row = 1;
+  writeRow(1, row, [`新媒体串片单  ${year}-${month}-${date}${day.weekday}`]);
+  merge(row);
+  row += 1;
+  writeRow(2, row, [`微信公众号  本周微刊小编：${day.wechatEditor || ""}`]);
+  merge(row);
+  row += 1;
+  writeRow(3, row, ["序号", " 节 目 标 题", "记者", "阅读量", "刚刚帖", "工分", "备注"]);
+  row += 1;
+  day.sections.wechat.forEach((entry, index) => {
+    writeRow(dailyBodySourceRow("wechat", index), row, [
+      index + 1,
+      entry.title,
+      entry.staff,
+      entry.views,
+      entry.duration,
+      entry.exportPoints || "",
+      entry.notes,
+    ]);
+    row += 1;
+  });
+
+  writeRow(9, row, [
+    `小编二创短视频（含制作封面、包框） 本周短视频主班小编：${day.videoEditor || ""}`,
+  ]);
+  merge(row);
+  row += 1;
+  writeRow(10, row, ["序号", " 节 目 标 题", "编辑", "阅读量", "时长", "工分", "备注"]);
+  row += 1;
+  day.sections.remix.forEach((entry, index) => {
+    writeRow(dailyBodySourceRow("remix", index), row, [
+      index + 1,
+      entry.title,
+      entry.staff,
+      entry.views,
+      entry.duration,
+      entry.exportPoints || "",
+      entry.notes,
+    ]);
+    row += 1;
+  });
+
+  writeRow(13, row, ["记者原创短视频（新媒体首发）"]);
+  merge(row);
+  row += 1;
+  writeRow(14, row, ["序号", " 节 目 标 题", "采编", "阅读量", "时长", "工分", "备注"]);
+  row += 1;
+  day.sections.original.forEach((entry, index) => {
+    writeRow(dailyBodySourceRow("original", index), row, [
+      index + 1,
+      entry.title,
+      entry.staff,
+      entry.views,
+      entry.duration,
+      entry.exportPoints || "",
+      entry.notes,
+    ]);
+    row += 1;
+  });
+
+  writeRow(17, row, [
+    `   值班责编:${day.dutyEditor || ""}     值班主任： ${day.dutyDirector || ""}        监审：${day.supervisor || ""}`,
+  ]);
+  merge(row);
+  row += 1;
+  writeRow(18, row, []);
+  columnWidths.forEach((width, column) => {
+    if (width !== undefined) sheet.getColumn(column + 1).width = width;
+  });
+}
+
+export async function createDailyWorkbook(day: DailyExportPayload) {
+  const ExcelJS = (await import("exceljs")).default;
+  const response = await fetch(`${import.meta.env.BASE_URL}daily-export-template.xlsx`);
+  if (!response.ok) throw new Error("无法读取日串单导出模板");
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await response.arrayBuffer());
+  const sheet = workbook.worksheets[0];
+  if (!sheet) throw new Error("日串单模板中没有工作表");
+  buildDailySheet(sheet, day);
+  return workbook;
+}
+
+export async function exportDailyWorkbook(day: DailyExportPayload) {
+  const workbook = await createDailyWorkbook(day);
+  const [year, month, date] = day.date.split("-").map(Number);
+  const content = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([content as BlobPart], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${year}年${month}月${date}日串单.xlsx`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function buildRundownSheet(XLSX: any, sheet: any, payload: ExportPayload) {

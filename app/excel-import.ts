@@ -13,6 +13,7 @@ export type ImportedDay = {
   date: string;
   weekday: string;
   wechatEditor: string;
+  videoEditor: string;
   dutyEditor: string;
   dutyDirector: string;
   supervisor: string;
@@ -86,6 +87,7 @@ function blankImportedDay(date: string): ImportedDay {
     date,
     weekday: weekdayFor(date),
     wechatEditor: "",
+    videoEditor: "",
     dutyEditor: "",
     dutyDirector: "",
     supervisor: "",
@@ -130,6 +132,7 @@ function parseRundownRows(rows: Row[], sourceTag: string) {
       return;
     }
     if (first.includes("小编二创短视频")) {
+      current.videoEditor = findEditor(first);
       category = "remix";
       return;
     }

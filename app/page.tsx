@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { parseExcelFile } from "./excel-import";
-import { exportMonthlyWorkbook } from "./excel-export";
+import { exportDailyWorkbook, exportMonthlyWorkbook } from "./excel-export";
 
 type Category = "wechat" | "remix" | "original";
 type TaskCategory = Category | "duty" | "bonus";
@@ -41,6 +41,7 @@ type Day = {
   date: string;
   weekday: string;
   wechatEditor: string;
+  videoEditor: string;
   dutyEditor: string;
   dutyDirector: string;
   supervisor: string;
@@ -51,10 +52,9 @@ function exportEntryPoints(category: Category, entry: Entry, reward = 0) {
   return entryPoints(category, entry, reward);
 }
 
-type LegacyDay = Omit<Day, "wechatEditor" | "dutyEditor" | "dutyDirector" | "supervisor"> &
-  Partial<Pick<Day, "wechatEditor" | "dutyEditor" | "dutyDirector" | "supervisor">> & {
+type LegacyDay = Omit<Day, "wechatEditor" | "videoEditor" | "dutyEditor" | "dutyDirector" | "supervisor"> &
+  Partial<Pick<Day, "wechatEditor" | "videoEditor" | "dutyEditor" | "dutyDirector" | "supervisor">> & {
   microEditor?: string;
-  videoEditor?: string;
   duty?: string;
 };
 
@@ -323,6 +323,7 @@ function normalizeDay(day: LegacyDay): Day {
     date: day.date,
     weekday: day.weekday,
     wechatEditor: day.wechatEditor ?? day.microEditor ?? "",
+    videoEditor: day.videoEditor ?? "",
     dutyEditor: day.dutyEditor ?? (legacyDutyName(legacyDuty, "值班责编") || fallbackEditor),
     dutyDirector: day.dutyDirector ?? legacyDutyName(legacyDuty, "值班主任"),
     supervisor: day.supervisor ?? legacyDutyName(legacyDuty, "监审"),
@@ -344,6 +345,7 @@ function blankDay(year: number, month: number, day: number): Day {
     date: dateKey(year, month, day),
     weekday: week[date.getDay()],
     wechatEditor: "",
+    videoEditor: "",
     dutyEditor: "",
     dutyDirector: "",
     supervisor: "",
@@ -983,100 +985,67 @@ export default function Home() {
     setToast("已恢复原始数据");
   }
 
-  function exportCsv() {
+  function exportSummaryCsv() {
     if (!data) return;
-    if (view === "summary") {
-      const rows = [
-        ["绩效分类", "序号/排名", "姓名", "微信转发", "微刊（分）", "短视频（分）", "刚刚帖（分）", "值班责编（分）", "新媒体微信（分）", "二创（分）", "原创（分）", "固定月绩效（分）", "参与任务", "合计（分）", "折合人民币"],
-        ...rankedScores.map(({ person, rank, group }) => [
-          group,
-          rank,
-          person.name,
-          "",
-          "",
-          "",
-          "",
-          formatPoints(person.duty),
-          formatPoints(person.wechat),
-          formatPoints(person.remix),
-          formatPoints(person.original),
-          formatPoints(person.fixed),
-          person.pieces,
-          formatPoints(person.total),
-          formatMoney(person.total),
-        ]),
-        ...newsCenterScores.map((person) => [
-          "新闻中心绩效",
-          person.order,
-          person.name,
-          `${person.forwardCount}条 / ${formatPoints(person.forward)}分`,
-          person.micro,
-          person.video,
-          person.justNow,
-          "",
-          "",
-          "",
-          "",
-          "",
-          "",
-          person.total,
-          formatMoney(person.total),
-        ]),
-      ];
-      downloadText(
-        `${selectedYear}年${selectedMonth}月新媒体工分汇总.csv`,
-        rows.map((row) => row.map(csvCell).join(",")).join("\n"),
-        "text/csv;charset=utf-8",
-      );
-      return;
-    }
-    if (!selectedDay) return;
-    const rows: (string | number)[][] = [
-      ["日期", "分类", "任务类型", "标题", "采编/编辑", "阅读量", "时长", "工分", "人均", "折合人民币", "备注"],
+    const rows = [
+      ["绩效分类", "序号/排名", "姓名", "微信转发", "微刊（分）", "短视频（分）", "刚刚帖（分）", "值班责编（分）", "新媒体微信（分）", "二创（分）", "原创（分）", "固定月绩效（分）", "参与任务", "合计（分）", "折合人民币"],
+      ...rankedScores.map(({ person, rank, group }) => [
+        group,
+        rank,
+        person.name,
+        "",
+        "",
+        "",
+        "",
+        formatPoints(person.duty),
+        formatPoints(person.wechat),
+        formatPoints(person.remix),
+        formatPoints(person.original),
+        formatPoints(person.fixed),
+        person.pieces,
+        formatPoints(person.total),
+        formatMoney(person.total),
+      ]),
+      ...newsCenterScores.map((person) => [
+        "新闻中心绩效",
+        person.order,
+        person.name,
+        `${person.forwardCount}条 / ${formatPoints(person.forward)}分`,
+        person.micro,
+        person.video,
+        person.justNow,
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        person.total,
+        formatMoney(person.total),
+      ]),
     ];
-    const dutyPeople = peopleFor(selectedDay.dutyEditor, data.members);
-    if (dutyPeople.length) {
-      const dutyPoints = taskMeta.duty_editor.points;
-      rows.push([
-        selectedDay.date,
-        "值班",
-        taskMeta.duty_editor.label,
-        "当日值班责编",
-        selectedDay.dutyEditor,
-        "",
-        "",
-        formatPoints(dutyPoints),
-        formatPoints(dutyPoints / dutyPeople.length),
-        formatMoney(dutyPoints / dutyPeople.length),
-        [selectedDay.dutyDirector && `值班主任：${selectedDay.dutyDirector}`, selectedDay.supervisor && `监审：${selectedDay.supervisor}`]
-          .filter(Boolean)
-          .join("；"),
-      ]);
-    }
-    (Object.keys(selectedDay.sections) as Category[]).forEach((category) => {
-      selectedDay.sections[category].forEach((entry) => {
-        const people = entryPeople(entry, selectedDay, data.members);
-        const points = entryPoints(category, entry, monthlyVideoRewards.get(entry.id) ?? 0);
-        rows.push([
-          selectedDay.date,
-          categoryMeta[category].label,
-          taskMeta[entry.taskType ?? defaultTaskType(category)].label,
-          entry.title,
-          entry.taskType === "park_hr_micro" ? selectedDay.wechatEditor : entry.staff,
-          entry.views,
-          entry.duration,
-          formatPoints(points),
-          formatPoints(people.length ? points / people.length : points),
-          formatMoney(people.length ? points / people.length : points),
-          entry.notes,
-        ]);
-      });
-    });
     downloadText(
-      `${formatDate(selectedDay.date)}新媒体串联单.csv`,
+      `${selectedYear}年${selectedMonth}月新媒体工分汇总.csv`,
       rows.map((row) => row.map(csvCell).join(",")).join("\n"),
       "text/csv;charset=utf-8",
     );
+  }
+
+  async function exportDailyRundown() {
+    if (!selectedDay) return;
+    try {
+      await exportDailyWorkbook({
+        ...selectedDay,
+        sections: {
+          wechat: selectedDay.sections.wechat.map((entry) => ({ ...entry, exportPoints: exportEntryPoints("wechat", entry) })),
+          remix: selectedDay.sections.remix.map((entry) => ({ ...entry, exportPoints: exportEntryPoints("remix", entry, monthlyVideoRewards.get(entry.id) ?? 0) })),
+          original: selectedDay.sections.original.map((entry) => ({ ...entry, exportPoints: exportEntryPoints("original", entry, monthlyVideoRewards.get(entry.id) ?? 0) })),
+        },
+      });
+      setToast(`已按模板导出 ${formatDate(selectedDay.date)} 日串单`);
+    } catch (error) {
+      window.alert(`导出日串单失败：${error instanceof Error ? error.message : "模板无法读取"}`);
+    }
   }
 
   async function exportTotalWorkbook() {
@@ -1136,7 +1105,11 @@ export default function Home() {
       }
 
       const replacementDays: Day[] = mode === "day"
-        ? [{ ...normalizeDay(sourceDay as LegacyDay), date: selectedDate, weekday: selectedDay.weekday }]
+        ? [{
+            ...normalizeDay(sourceDay as LegacyDay),
+            date: selectedDate,
+            weekday: selectedDay?.weekday ?? blankDay(selectedYear, selectedMonth, dayLabel(selectedDate)).weekday,
+          }]
         : visibleDays.map((existingDay) => {
             const importedDay = importedForCurrentMonth.find((day) => day.date === existingDay.date);
             return importedDay ? normalizeDay(importedDay as LegacyDay) : blankDay(selectedYear, selectedMonth, dayLabel(existingDay.date));
@@ -1266,8 +1239,8 @@ export default function Home() {
           >
             {isImporting ? "读取中…" : "导入月串单"}
           </button>
-          <button className="primary-button" onClick={exportCsv}>
-            导出 CSV
+          <button className="primary-button" onClick={() => void exportDailyRundown()}>
+            导出日串单
           </button>
         </div>
       </header>
@@ -1737,7 +1710,7 @@ export default function Home() {
                     />
                     {personQuery && <button onClick={() => setPersonQuery("")} aria-label="清除检索">×</button>}
                   </label>
-                  <button className="ghost-button" onClick={exportCsv}>导出汇总</button>
+                  <button className="ghost-button" onClick={exportSummaryCsv}>导出汇总</button>
                   <button className="primary-button total-export-button" onClick={() => void exportTotalWorkbook()}>总导出 Excel</button>
                 </div>
               </div>
