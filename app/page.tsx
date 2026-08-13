@@ -113,7 +113,7 @@ type ImportMode = "day" | "month";
 
 const STORAGE_KEY = "nanping-media-rundown-calendar-v2";
 const LEGACY_STORAGE_KEY = "nanping-media-rundown-2026-07-v1";
-const ADMIN_TOKEN_KEY = "nanping-media-admin-token-v1";
+const ADMIN_TOKEN_KEY = "nanping-media-admin-token-v2";
 const CLOUD_API_ORIGIN = "https://zxc123-d4g32cdzfcf29813a.service.tcloudbase.com/xinmeiti-sync";
 const RMB_PER_POINT = 25;
 const NEW_MEDIA_TEAM = [
@@ -145,7 +145,7 @@ const NEWS_CENTER_TEAM_SET = new Set<string>(NEWS_CENTER_TEAM);
 const WECHAT_WEEKLY_POINTS = 1200 / RMB_PER_POINT;
 const DEFAULT_FORWARD_COUNT = 40;
 const DEFAULT_FORWARD_POINTS = 1.6;
-const ADMIN_SESSION_KEY = "nanping-media-admin-until";
+const ADMIN_SESSION_KEY = "nanping-media-admin-until-v2";
 const ADMIN_SESSION_MS = 2 * 60 * 60 * 1000;
 const ADMIN_PASSWORD_HASH = "5600715f42bf51c40dc330d750cd996f58fead4ddea56466ce7498d17801b3a5";
 const DUTY_EDITOR_CANDIDATES = ["张瑞君", "周婷", "张笑弛"] as const;
@@ -160,9 +160,10 @@ async function fetchCloudState() {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 12_000);
   try {
-    const response = await fetch(cloudApiUrl("/api/shared-state"), {
+    const response = await fetch(`${cloudApiUrl("/api/shared-state")}?time=${Date.now()}`, {
       cache: "no-store",
       credentials: "omit",
+      headers: { "Cache-Control": "no-cache" },
       signal: controller.signal,
     });
     if (!response.ok) throw new Error("云端读取失败");
@@ -534,9 +535,10 @@ export default function Home() {
         const normalizedSeed = normalizeSheet({ ...seed, title: "新媒体全年串联单" });
         initialData.current = normalizedSeed;
         const stored = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
-        if (cloud?.data) {
+        if (cloud) {
           cloudVersion.current = cloud.version;
-          setData(ensureMonth(normalizeSheet(cloud.data), selectedYear, selectedMonth));
+          const latest = cloud.data ? normalizeSheet(cloud.data) : normalizedSeed;
+          setData(ensureMonth(latest, selectedYear, selectedMonth));
         } else if (stored) {
           try {
             setData(ensureMonth(normalizeSheet(JSON.parse(stored)), selectedYear, selectedMonth));
@@ -657,14 +659,18 @@ export default function Home() {
     const handleVisibility = () => {
       if (document.visibilityState === "visible") void refresh();
     };
-    const timer = window.setInterval(() => void refresh(), 10_000);
+    const timer = window.setInterval(() => void refresh(), 5_000);
     window.addEventListener("online", refresh);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("pageshow", refresh);
     document.addEventListener("visibilitychange", handleVisibility);
     void refresh();
     return () => {
       stopped = true;
       window.clearInterval(timer);
       window.removeEventListener("online", refresh);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("pageshow", refresh);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [data, selectedMonth, selectedYear]);
