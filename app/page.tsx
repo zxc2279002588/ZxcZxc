@@ -163,7 +163,6 @@ async function fetchCloudState() {
     const response = await fetch(`${cloudApiUrl("/api/shared-state")}?time=${Date.now()}`, {
       cache: "no-store",
       credentials: "omit",
-      headers: { "Cache-Control": "no-cache" },
       signal: controller.signal,
     });
     if (!response.ok) throw new Error("云端读取失败");
