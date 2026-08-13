@@ -156,6 +156,27 @@ const MONTHLY_FIXED_BONUSES = new Map<string, { taskType: TaskType; points: numb
   ["吴轲宇", { taskType: "command_phone", points: 20 }],
 ]);
 
+async function fetchCloudState() {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(cloudApiUrl("/api/shared-state"), {
+      cache: "no-store",
+      credentials: "omit",
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error("云端读取失败");
+    return await response.json() as { data: SheetData | null; version: number };
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function cloudApiUrl(path: string) {
+  if (typeof window !== "undefined" && window.location.hostname.endsWith("chatgpt.site")) return path;
+  return `${CLOUD_API_ORIGIN}${path}`;
+}
+
 const categoryMeta: Record<
   Category,
   { label: string; short: string; description: string; className: string }
@@ -471,12 +492,7 @@ export default function Home() {
   useEffect(() => {
     Promise.all([
       fetch(`${import.meta.env.BASE_URL}seed.json`).then((response) => response.json() as Promise<SheetData>),
-      fetch(`${CLOUD_API_ORIGIN}/api/shared-state`, { cache: "no-store" })
-        .then(async (response) => {
-          if (!response.ok) throw new Error("云端读取失败");
-          return response.json() as Promise<{ data: SheetData | null; version: number }>;
-        })
-        .catch(() => null),
+      fetchCloudState().catch(() => null),
     ]).then(([seed, cloud]) => {
         const normalizedSeed = normalizeSheet({ ...seed, title: "新媒体全年串联单" });
         initialData.current = normalizedSeed;
@@ -484,7 +500,6 @@ export default function Home() {
         if (cloud?.data) {
           cloudVersion.current = cloud.version;
           setData(ensureMonth(normalizeSheet(cloud.data), selectedYear, selectedMonth));
-          setSyncStatus("synced");
         } else if (stored) {
           try {
             setData(ensureMonth(normalizeSheet(JSON.parse(stored)), selectedYear, selectedMonth));
@@ -494,7 +509,7 @@ export default function Home() {
         } else {
           setData(ensureMonth(normalizedSeed, selectedYear, selectedMonth));
         }
-        if (!cloud) setSyncStatus("offline");
+        setSyncStatus(cloud ? "synced" : "offline");
         skipNextCloudSave.current = true;
         hydrated.current = true;
       });
@@ -539,7 +554,7 @@ export default function Home() {
       if (!cloudSaveQueued.current) return;
       cloudSaveQueued.current = false;
       try {
-        const response = await fetch(`${CLOUD_API_ORIGIN}/api/shared-state`, {
+        const response = await fetch(cloudApiUrl("/api/shared-state"), {
           method: "PUT",
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
           body: JSON.stringify({ data, baseVersion: cloudVersion.current }),
@@ -575,24 +590,45 @@ export default function Home() {
 
   useEffect(() => {
     if (!data) return;
-    const refresh = window.setInterval(async () => {
-      if (cloudSaveQueued.current || syncStatus === "saving") return;
+    let stopped = false;
+    const refresh = async () => {
       try {
-        const response = await fetch(`${CLOUD_API_ORIGIN}/api/shared-state`, { cache: "no-store" });
-        const result = await response.json() as { data: SheetData | null; version: number };
-        if (response.ok && result.data && result.version > cloudVersion.current) {
+        const result = await fetchCloudState();
+        if (stopped) return;
+        if (result.data && result.version > cloudVersion.current) {
           cloudVersion.current = result.version;
+          cloudSaveQueued.current = false;
           skipNextCloudSave.current = true;
           setData(ensureMonth(normalizeSheet(result.data), selectedYear, selectedMonth));
           setSyncStatus("synced");
           setToast("已收到其他管理员的最新修改");
+          return;
         }
+        if (cloudSaveQueued.current && localStorage.getItem(ADMIN_TOKEN_KEY)) {
+          cloudSaveQueued.current = false;
+          setSyncStatus("saving");
+          setData((current) => current ? structuredClone(current) : current);
+          return;
+        }
+        setSyncStatus("synced");
       } catch {
-        if (syncStatus === "synced") setSyncStatus("offline");
+        if (!stopped) setSyncStatus("offline");
       }
-    }, 15_000);
-    return () => window.clearInterval(refresh);
-  }, [data, selectedMonth, selectedYear, syncStatus]);
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    const timer = window.setInterval(() => void refresh(), 10_000);
+    window.addEventListener("online", refresh);
+    document.addEventListener("visibilitychange", handleVisibility);
+    void refresh();
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      window.removeEventListener("online", refresh);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [data, selectedMonth, selectedYear]);
 
   useEffect(() => {
     if (!toast) return;
@@ -638,7 +674,7 @@ export default function Home() {
     event.preventDefault();
     try {
       if ((await passwordHash(adminPassword)) !== ADMIN_PASSWORD_HASH) throw new Error("密码不正确，请重新输入");
-      const response = await fetch(`${CLOUD_API_ORIGIN}/api/admin-session`, {
+      const response = await fetch(cloudApiUrl("/api/admin-session"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password: adminPassword }),
