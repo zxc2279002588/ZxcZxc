@@ -114,7 +114,7 @@ type ImportMode = "day" | "month";
 const STORAGE_KEY = "nanping-media-rundown-calendar-v2";
 const LEGACY_STORAGE_KEY = "nanping-media-rundown-2026-07-v1";
 const ADMIN_TOKEN_KEY = "nanping-media-admin-token-v1";
-const CLOUD_API_ORIGIN = "https://xinmeiti-chuandan-2026.zx2279002588.chatgpt.site";
+const CLOUD_API_ORIGIN = "https://zxc123-d4g32cdzfcf29813a.service.tcloudbase.com/xinmeiti-sync";
 const RMB_PER_POINT = 25;
 const NEW_MEDIA_TEAM = [
   "张瑞君",
@@ -166,15 +166,52 @@ async function fetchCloudState() {
       signal: controller.signal,
     });
     if (!response.ok) throw new Error("云端读取失败");
-    return await response.json() as { data: SheetData | null; version: number };
+    return await parseCloudStateResponse(response);
   } finally {
     window.clearTimeout(timer);
   }
 }
 
+type CloudStateResponse = {
+  data: SheetData | null;
+  version: number;
+  updatedAt?: number | null;
+  error?: string;
+};
+
+async function parseCloudStateResponse(response: Response): Promise<CloudStateResponse> {
+  const result = await response.json() as {
+    data?: SheetData | null;
+    dataGzip?: string;
+    version?: number;
+    updatedAt?: number | null;
+    error?: string;
+  };
+  if (!result.dataGzip) {
+    return { data: result.data ?? null, version: result.version ?? 0, updatedAt: result.updatedAt, error: result.error };
+  }
+  if (typeof DecompressionStream === "undefined") throw new Error("当前浏览器不支持云端数据解压");
+  const binary = atob(result.dataGzip);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  const data = JSON.parse(await new Response(stream).text()) as SheetData;
+  return { data, version: result.version ?? 0, updatedAt: result.updatedAt, error: result.error };
+}
+
 function cloudApiUrl(path: string) {
-  if (typeof window !== "undefined" && window.location.hostname.endsWith("chatgpt.site")) return path;
   return `${CLOUD_API_ORIGIN}${path}`;
+}
+
+async function compressedCloudPayload(data: SheetData, baseVersion: number) {
+  if (typeof CompressionStream === "undefined") return { data, baseVersion };
+  const input = new Blob([JSON.stringify(data)]).stream();
+  const compressed = await new Response(input.pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
+  const bytes = new Uint8Array(compressed);
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return { dataGzip: btoa(binary), baseVersion };
 }
 
 const categoryMeta: Record<
@@ -557,9 +594,11 @@ export default function Home() {
         const response = await fetch(cloudApiUrl("/api/shared-state"), {
           method: "PUT",
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ data, baseVersion: cloudVersion.current }),
+          body: JSON.stringify(await compressedCloudPayload(data, cloudVersion.current)),
         });
-        const result = await response.json() as { data?: SheetData; version?: number; error?: string };
+        const result = response.status === 409
+          ? await parseCloudStateResponse(response)
+          : await response.json() as { data?: SheetData | null; version?: number; error?: string };
         if (response.status === 409 && result.data && typeof result.version === "number") {
           cloudVersion.current = result.version;
           skipNextCloudSave.current = true;
