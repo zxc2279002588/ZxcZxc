@@ -231,6 +231,7 @@ function weekStart(dateString: string) {
 }
 
 function entryPoints(category: Category, entry: Entry, monthlyVideoReward = 0) {
+  if (category === "remix" && !entry.staff.trim()) return 0;
   if (entry.manualPoints !== null) return entry.manualPoints;
   const taskType = entry.taskType ?? defaultTaskType(category);
   const base = taskMeta[taskType].points;
