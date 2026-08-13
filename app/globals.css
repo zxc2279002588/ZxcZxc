@@ -1431,6 +1431,30 @@ td textarea:focus {
   border-top: 3px solid var(--blue);
 }
 
+.performance-card.video-ranking {
+  border-top: 3px solid var(--orange);
+}
+
+.video-ranking .performance-label {
+  color: var(--orange);
+}
+
+.video-ranking-table {
+  min-width: 900px;
+}
+
+.video-ranking-table td:nth-child(4) {
+  max-width: 360px;
+}
+
+.video-views {
+  color: var(--blue);
+  font-family: Georgia, serif;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .score-card-heading {
   display: flex;
   align-items: center;

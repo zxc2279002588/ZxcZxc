@@ -89,6 +89,15 @@ type PersonTask = {
   rewardPoints: number;
 };
 
+type RankedVideo = {
+  date: string;
+  category: "remix" | "original";
+  entry: Entry;
+  views: number;
+  people: string[];
+  rewardPoints: number;
+};
+
 type NewsCenterScore = {
   name: string;
   order: number;
@@ -575,22 +584,44 @@ export default function Home() {
     return data?.days.filter((day) => day.date.startsWith(prefix)) ?? [];
   }, [data, selectedMonth, selectedYear]);
 
-  const monthlyVideoRewards = useMemo(() => {
-    const candidates = visibleDays
+  const monthlyTopVideos = useMemo<RankedVideo[]>(() => {
+    if (!data) return [];
+    return visibleDays
       .flatMap((day) => [
-        ...day.sections.remix.map((entry) => ({ entry, views: parseViews(entry.views) })),
-        ...day.sections.original.map((entry) => ({ entry, views: parseViews(entry.views) })),
+        ...day.sections.remix.map((entry) => ({
+          date: day.date,
+          category: "remix" as const,
+          entry,
+          views: parseViews(entry.views),
+          people: entryPeople(entry, day, data.members),
+        })),
+        ...day.sections.original.map((entry) => ({
+          date: day.date,
+          category: "original" as const,
+          entry,
+          views: parseViews(entry.views),
+          people: entryPeople(entry, day, data.members),
+        })),
       ])
-      .filter(({ views }) => views >= 30000)
-      .sort((a, b) => b.views - a.views)
-      .slice(0, 10);
+      .filter(({ views, people }) => views > 0 && people.length > 0)
+      .sort((a, b) => b.views - a.views || a.date.localeCompare(b.date))
+      .slice(0, 10)
+      .map((video) => ({
+        ...video,
+        rewardPoints:
+          video.views >= 10000000 ? 36 :
+          video.views >= 1000000 ? 24 :
+          video.views >= 100000 ? 12 : 8,
+      }));
+  }, [data, visibleDays]);
+
+  const monthlyVideoRewards = useMemo(() => {
     const rewards = new Map<string, number>();
-    candidates.forEach(({ entry, views }) => {
-      const reward = views >= 10000000 ? 36 : views >= 1000000 ? 24 : views >= 100000 ? 12 : 8;
-      rewards.set(entry.id, reward);
+    monthlyTopVideos.forEach(({ entry, rewardPoints }) => {
+      rewards.set(entry.id, rewardPoints);
     });
     return rewards;
-  }, [visibleDays]);
+  }, [monthlyTopVideos]);
 
   const scores = useMemo<PersonScore[]>(() => {
     if (!data) return [];
@@ -1583,7 +1614,7 @@ export default function Home() {
                             <th className="number-col">序号</th>
                             <th className="title-col">节目标题</th>
                             <th className="staff-col">{category === "remix" ? "编辑" : "记者"}</th>
-                            <th className="views-col">阅读量</th>
+                            <th className="views-col">{category === "wechat" ? "阅读量" : "播放量"}</th>
                             <th className="duration-col">{category === "wechat" ? "刚刚帖" : "时长"}</th>
                             <th className="points-col">工分</th>
                             <th className="notes-col">备注</th>
@@ -1630,7 +1661,7 @@ export default function Home() {
                                     value={entry.views}
                                     onChange={(event) => updateEntry(category, entry.id, { views: event.target.value })}
                                     placeholder="0"
-                                    aria-label={`${meta.label}第${originalIndex + 1}条阅读量`}
+                                    aria-label={`${meta.label}第${originalIndex + 1}条${category === "wechat" ? "阅读量" : "播放量"}`}
                                   />
                                 </td>
                                 <td>
@@ -1680,7 +1711,7 @@ export default function Home() {
                                     {entry.manualPoints === null ? (
                                       <small>
                                         自动 · {taskMeta[entry.taskType ?? defaultTaskType(category)].unit}
-                                        {rewardPoints > 0 ? ` + 阅读${unitForPoints(rewardPoints)}` : ""}
+                                        {rewardPoints > 0 ? ` + 播放奖励${unitForPoints(rewardPoints)}` : ""}
                                         {entry.taskType === "park_hr_micro"
                                           ? selectedDay.wechatEditor
                                             ? ` · 归属${selectedDay.wechatEditor}`
@@ -1812,6 +1843,50 @@ export default function Home() {
                 </div>
               </div>
               <div className="performance-groups">
+                <div className="score-card performance-card video-ranking">
+                  <div className="score-card-heading">
+                    <div>
+                      <span className="performance-label">TOP 10 VIDEOS</span>
+                      <h3>短视频播放量前十</h3>
+                      <p>仅统计填写记者/编辑姓名的二创与原创 · 按播放量从高到低自动排名</p>
+                    </div>
+                    <div className="group-total">
+                      <span>{monthlyTopVideos.length} 条入榜</span>
+                      <strong>{formatPoints(monthlyTopVideos.reduce((sum, video) => sum + video.rewardPoints, 0))} 分奖励</strong>
+                    </div>
+                  </div>
+                  <div className="score-table-wrap">
+                    <table className="score-table video-ranking-table">
+                      <thead>
+                        <tr>
+                          <th>排名</th>
+                          <th>日期</th>
+                          <th>类别</th>
+                          <th>节目标题</th>
+                          <th>记者/编辑</th>
+                          <th>播放量</th>
+                          <th>奖励工分</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {monthlyTopVideos.map((video, index) => (
+                          <tr key={`${video.date}-${video.entry.id}`}>
+                            <td><span className={`rank rank-${index + 1}`}>{index + 1}</span></td>
+                            <td>{formatDate(video.date)}</td>
+                            <td><span className={`category-pill ${video.category}`}>{categoryMeta[video.category].short}</span></td>
+                            <td><strong>{video.entry.title || "未填写标题"}</strong></td>
+                            <td><strong>{video.people.join("、")}</strong></td>
+                            <td><strong className="video-views">{new Intl.NumberFormat("zh-CN").format(video.views)}</strong></td>
+                            <td><strong className="total-score">{unitForPoints(video.rewardPoints)} · {formatPoints(video.rewardPoints)}分</strong></td>
+                          </tr>
+                        ))}
+                        {!monthlyTopVideos.length && (
+                          <tr><td className="no-person-result" colSpan={7}>当月暂无填写姓名和播放量的二创或原创短视频</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
                 {filteredScoreGroups.map((group) => {
                   const originalGroup = scoreGroups.find((item) => item.key === group.key) ?? group;
                   const groupPoints = originalGroup.people.reduce((sum, item) => sum + item.person.total, 0);
@@ -1984,7 +2059,7 @@ export default function Home() {
                                 </td>
                                 <td>
                                   <strong>{task.entry.title || "未填写标题"}</strong>
-                                  {task.rewardPoints > 0 && <small className="reward-note">月度阅读奖励 +{unitForPoints(task.rewardPoints)}</small>}
+                                  {task.rewardPoints > 0 && <small className="reward-note">月度播放量前十奖励 +{unitForPoints(task.rewardPoints)}</small>}
                                   {task.entry.notes && <small>{task.entry.notes}</small>}
                                 </td>
                                 <td>{formatPoints(task.totalPoints)}</td>
@@ -2023,7 +2098,7 @@ export default function Home() {
               <li><strong>短视频编辑</strong><span>1D / 条（2分，¥50）</span></li>
               <li><strong>新闻活动类外采短视频</strong><span>1C / 条（5分，¥125）</span></li>
               <li><strong>剧情类短视频</strong><span>A+B 起评（20分，¥500）</span></li>
-              <li><strong>短视频阅读量奖励</strong><span>每月前十名、3万起评：1B；超10万1A；超100万2A；超1000万3A</span></li>
+              <li><strong>短视频播放量奖励</strong><span>每月自动统计带记者/编辑姓名的二创、原创；播放量前十奖励1B起评，超10万1A、超100万2A、超1000万3A</span></li>
               <li><strong>微信公众号代运营编辑</strong><span>3D / 组（6分，¥150）</span></li>
               <li><strong>每月微博发布</strong><span>0.5D / 条（1分，¥25）</span></li>
               <li><strong>视频连线、直播拉流</strong><span>1D / 场（2分，¥50）</span></li>
