@@ -2180,11 +2180,13 @@ export default function Home() {
         >
           {isMusicPlaying ? "Ⅱ" : "▶"}
         </button>
-        <div className="music-cover" aria-hidden="true">念</div>
+        <div className="music-cover">
+          <img src={`${import.meta.env.BASE_URL}nian-zhang-shi-cover-20260813.jpg`} alt="《念张师》音乐封面" />
+        </div>
         <div className="music-info">
           <span>{isMusicPlaying ? "正在播放" : "已暂停"}</span>
-          <strong>念张师</strong>
-          <small>尚春 · 张雪峰老师 我还记得你</small>
+          <strong>《念张师》</strong>
+          <small>吴轲宇——张瑞君老师 我还记得你</small>
         </div>
         <div className={`music-bars ${isMusicPlaying ? "is-playing" : ""}`} aria-hidden="true">
           <i /><i /><i />
