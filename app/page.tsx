@@ -113,6 +113,8 @@ type ImportMode = "day" | "month";
 
 const STORAGE_KEY = "nanping-media-rundown-calendar-v2";
 const LEGACY_STORAGE_KEY = "nanping-media-rundown-2026-07-v1";
+const ADMIN_TOKEN_KEY = "nanping-media-admin-token-v1";
+const CLOUD_API_ORIGIN = "https://xinmeiti-chuandan-2026.zx2279002588.chatgpt.site";
 const RMB_PER_POINT = 25;
 const NEW_MEDIA_TEAM = [
   "张瑞君",
@@ -413,7 +415,9 @@ async function passwordHash(value: string) {
 }
 
 function adminAccessActive() {
-  return typeof window !== "undefined" && Number(localStorage.getItem(ADMIN_SESSION_KEY) ?? 0) > Date.now();
+  return typeof window !== "undefined" &&
+    Number(localStorage.getItem(ADMIN_SESSION_KEY) ?? 0) > Date.now() &&
+    Boolean(localStorage.getItem(ADMIN_TOKEN_KEY));
 }
 
 export default function Home() {
@@ -429,6 +433,7 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [personQuery, setPersonQuery] = useState("");
   const [saved, setSaved] = useState(true);
+  const [syncStatus, setSyncStatus] = useState<"loading" | "synced" | "saving" | "offline" | "conflict">("loading");
   const [showRules, setShowRules] = useState(false);
   const [toast, setToast] = useState("");
   const [isImporting, setIsImporting] = useState(false);
@@ -440,6 +445,9 @@ export default function Home() {
   const [adminError, setAdminError] = useState("");
   const [openCandidatePicker, setOpenCandidatePicker] = useState<"duty" | "wechat" | null>(null);
   const hydrated = useRef(false);
+  const cloudVersion = useRef(0);
+  const cloudSaveQueued = useRef(false);
+  const skipNextCloudSave = useRef(true);
   const dayFileInputRef = useRef<HTMLInputElement>(null);
   const monthFileInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -448,8 +456,12 @@ export default function Home() {
   useEffect(() => {
     const checkAdmin = () => {
       const adminUntil = Number(localStorage.getItem(ADMIN_SESSION_KEY) ?? 0);
-      setIsAdmin(adminUntil > Date.now());
-      if (adminUntil && adminUntil <= Date.now()) localStorage.removeItem(ADMIN_SESSION_KEY);
+      const active = adminUntil > Date.now() && Boolean(localStorage.getItem(ADMIN_TOKEN_KEY));
+      setIsAdmin(active);
+      if (adminUntil && adminUntil <= Date.now()) {
+        localStorage.removeItem(ADMIN_SESSION_KEY);
+        localStorage.removeItem(ADMIN_TOKEN_KEY);
+      }
     };
     checkAdmin();
     const timer = window.setInterval(checkAdmin, 60_000);
@@ -457,13 +469,23 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    fetch(`${import.meta.env.BASE_URL}seed.json`)
-      .then((response) => response.json())
-      .then((seed: SheetData) => {
+    Promise.all([
+      fetch(`${import.meta.env.BASE_URL}seed.json`).then((response) => response.json() as Promise<SheetData>),
+      fetch(`${CLOUD_API_ORIGIN}/api/shared-state`, { cache: "no-store" })
+        .then(async (response) => {
+          if (!response.ok) throw new Error("云端读取失败");
+          return response.json() as Promise<{ data: SheetData | null; version: number }>;
+        })
+        .catch(() => null),
+    ]).then(([seed, cloud]) => {
         const normalizedSeed = normalizeSheet({ ...seed, title: "新媒体全年串联单" });
         initialData.current = normalizedSeed;
         const stored = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
-        if (stored) {
+        if (cloud?.data) {
+          cloudVersion.current = cloud.version;
+          setData(ensureMonth(normalizeSheet(cloud.data), selectedYear, selectedMonth));
+          setSyncStatus("synced");
+        } else if (stored) {
           try {
             setData(ensureMonth(normalizeSheet(JSON.parse(stored)), selectedYear, selectedMonth));
           } catch {
@@ -472,6 +494,8 @@ export default function Home() {
         } else {
           setData(ensureMonth(normalizedSeed, selectedYear, selectedMonth));
         }
+        if (!cloud) setSyncStatus("offline");
+        skipNextCloudSave.current = true;
         hydrated.current = true;
       });
     // Initial import happens once; later month changes expand the same working calendar.
@@ -502,6 +526,75 @@ export default function Home() {
   }, [data]);
 
   useEffect(() => {
+    if (!data || !hydrated.current) return;
+    if (skipNextCloudSave.current) {
+      skipNextCloudSave.current = false;
+      return;
+    }
+    const token = localStorage.getItem(ADMIN_TOKEN_KEY);
+    if (!token) return;
+    cloudSaveQueued.current = true;
+    setSyncStatus("saving");
+    const timer = window.setTimeout(async () => {
+      if (!cloudSaveQueued.current) return;
+      cloudSaveQueued.current = false;
+      try {
+        const response = await fetch(`${CLOUD_API_ORIGIN}/api/shared-state`, {
+          method: "PUT",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ data, baseVersion: cloudVersion.current }),
+        });
+        const result = await response.json() as { data?: SheetData; version?: number; error?: string };
+        if (response.status === 409 && result.data && typeof result.version === "number") {
+          cloudVersion.current = result.version;
+          skipNextCloudSave.current = true;
+          setData(ensureMonth(normalizeSheet(result.data), selectedYear, selectedMonth));
+          setSyncStatus("conflict");
+          setToast("云端已有更新，已载入最新版；请重新进行刚才的修改");
+          return;
+        }
+        if (response.status === 401) {
+          localStorage.removeItem(ADMIN_TOKEN_KEY);
+          localStorage.removeItem(ADMIN_SESSION_KEY);
+          setIsAdmin(false);
+          setSyncStatus("offline");
+          setToast("管理员登录已过期，请重新验证后保存");
+          return;
+        }
+        if (!response.ok || typeof result.version !== "number") throw new Error(result.error ?? "同步失败");
+        cloudVersion.current = result.version;
+        setSyncStatus("synced");
+      } catch {
+        cloudSaveQueued.current = true;
+        setSyncStatus("offline");
+        setToast("网络暂时不可用，修改已保存在本机；恢复网络后再编辑一次即可同步");
+      }
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [data, selectedMonth, selectedYear]);
+
+  useEffect(() => {
+    if (!data) return;
+    const refresh = window.setInterval(async () => {
+      if (cloudSaveQueued.current || syncStatus === "saving") return;
+      try {
+        const response = await fetch(`${CLOUD_API_ORIGIN}/api/shared-state`, { cache: "no-store" });
+        const result = await response.json() as { data: SheetData | null; version: number };
+        if (response.ok && result.data && result.version > cloudVersion.current) {
+          cloudVersion.current = result.version;
+          skipNextCloudSave.current = true;
+          setData(ensureMonth(normalizeSheet(result.data), selectedYear, selectedMonth));
+          setSyncStatus("synced");
+          setToast("已收到其他管理员的最新修改");
+        }
+      } catch {
+        if (syncStatus === "synced") setSyncStatus("offline");
+      }
+    }, 15_000);
+    return () => window.clearInterval(refresh);
+  }, [data, selectedMonth, selectedYear, syncStatus]);
+
+  useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 2400);
     return () => window.clearTimeout(timer);
@@ -529,7 +622,7 @@ export default function Home() {
 
   function requireAdmin(action?: () => void) {
     const adminUntil = Number(localStorage.getItem(ADMIN_SESSION_KEY) ?? 0);
-    if (adminUntil > Date.now()) {
+    if (adminUntil > Date.now() && localStorage.getItem(ADMIN_TOKEN_KEY)) {
       setIsAdmin(true);
       action?.();
       return true;
@@ -543,18 +636,28 @@ export default function Home() {
 
   async function submitAdminPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if ((await passwordHash(adminPassword)) !== ADMIN_PASSWORD_HASH) {
-      setAdminError("密码不正确，请重新输入");
-      return;
+    try {
+      if ((await passwordHash(adminPassword)) !== ADMIN_PASSWORD_HASH) throw new Error("密码不正确，请重新输入");
+      const response = await fetch(`${CLOUD_API_ORIGIN}/api/admin-session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: adminPassword }),
+      });
+      const result = await response.json() as { token?: string; expiresAt?: number; error?: string };
+      if (!response.ok || !result.token || !result.expiresAt) throw new Error(result.error ?? "管理员验证失败");
+      localStorage.setItem(ADMIN_TOKEN_KEY, result.token);
+      localStorage.setItem(ADMIN_SESSION_KEY, String(result.expiresAt));
+      setIsAdmin(true);
+      setShowAdminLogin(false);
+      setAdminPassword("");
+      setToast(cloudVersion.current === 0 ? "管理员验证成功，本机数据将在首次修改后同步" : "管理员验证成功，2小时内可编辑并联网同步");
+      if (cloudVersion.current === 0) setData((current) => current ? structuredClone(current) : current);
+      const action = pendingAdminAction.current;
+      pendingAdminAction.current = null;
+      action?.();
+    } catch (error) {
+      setAdminError(error instanceof Error ? error.message : "管理员验证失败");
     }
-    localStorage.setItem(ADMIN_SESSION_KEY, String(Date.now() + ADMIN_SESSION_MS));
-    setIsAdmin(true);
-    setShowAdminLogin(false);
-    setAdminPassword("");
-    setToast("管理员验证成功，2小时内可编辑");
-    const action = pendingAdminAction.current;
-    pendingAdminAction.current = null;
-    action?.();
   }
 
   function requestEditAccess() {
@@ -1320,8 +1423,14 @@ export default function Home() {
           </div>
         </div>
         <div className="top-actions">
-          <span className={`save-status ${saved ? "is-saved" : ""}`}>
-            <i /> {saved ? "已自动保存" : "保存中…"}
+          <span className={`save-status ${saved && syncStatus === "synced" ? "is-saved" : ""}`}>
+            <i /> {
+              syncStatus === "loading" ? "连接云端…" :
+              syncStatus === "saving" || !saved ? "云端保存中…" :
+              syncStatus === "offline" ? "本机已保存 · 云端离线" :
+              syncStatus === "conflict" ? "已载入云端新版" :
+              "已同步到云端"
+            }
           </span>
           <button
             className={`access-status ${isAdmin ? "is-admin" : ""}`}
